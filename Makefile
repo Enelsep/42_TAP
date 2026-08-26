@@ -11,7 +11,7 @@ server: build ; ./bin/server -addr :4242 -world data/world.json
 cli:    build ; ./bin/cli    -addr localhost:4242
 
 gui:
-	cd gui && wails dev
+	cd gui && wails dev -tags webkit2_41
 
 lint:
 	gofmt -l . && go vet ./core/...
