@@ -286,6 +286,13 @@ kept as a sibling of `exits` rather than turning exits into objects, so
 
 ---
 
+## D11 - Canonical ids are applied at load time
+
+The world JSON file keys entities bare ("start", "bone", "guard") and references them bare; the load() function re-keys every map to loc.start / item.bone / npc.guard and rewrites every reference to match : exit targets, requires values, room items, spawns.npc_type, NPC drops, and a quest's giver/target/grants/reward.
+
+**Rationale.** those ids go out on the wire in LOOK, MOVE, TAKE and INVENTORY, so they have to be canonical somewhere. The alternative (bare ids internally, prefixing at the wire boundary) would put a conversion in every handler and a matching strip on every inbound TAKE item.spice. Doing it once at load means data/world.json stays pleasant to hand-edit
+---
+
 ## Still open
 
 - **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn
