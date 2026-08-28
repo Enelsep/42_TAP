@@ -17,8 +17,8 @@
                     "east": "square"
                 },
                 "spawns": {
-                    "npc_type": "night guards",
-                    "count": 2
+                    "npc_type": "guard",
+                    "count": 1
                 }
             },
             "square": {
@@ -81,11 +81,14 @@
             },
             "door": {
                 "name": "Giant door",
-                "description": "An ominous gigantic alien door carved in the mountain and covered with ancient symbols.",
+                "description": "An ominous gigantic alien door carved in the mountain and covered with ancient symbols. A keyhole shaped like no key you own sits at its center.",
                 "exits": {
                     "north": "boss",
                     "west": "suburbs",
                     "east": "camp"
+                },
+                "requires": {
+                    "north": "key"
                 }
             },
             "boss": {
@@ -97,7 +100,7 @@
             },
             "suburbs": {
                 "name": "City suburbs",
-                "description": "The city suburbs. You can hear barking and growling.",
+                "description": "The city suburbs. You can hear barking.",
                 "exits": {
                     "south": "start",
                     "east": "door"
@@ -110,7 +113,7 @@
         },
         "items": {
             "spice": {
-                "name": "Stellar spice",
+                "name": "Blue spice",
                 "description": "A tasty spice that re-architectures your brain chemistry.",
                 "obtainable": true
             },
@@ -118,60 +121,105 @@
                 "name": "Space liquor",
                 "description": "An alien liquor. The smell is strong and transmundane",
                 "obtainable": true
+            },
+            "key": {
+                "name": "Alien key",
+                "description": "A strange alien key with ancient symbols on it.",
+                "obtainable": false
+            },
+            "bone": {
+                "name": "Extraterrestrial bone",
+                "description": "A bone, not like any bone you ever seen",
+                "obtainable": false
+            },
+            "water": {
+                "name": "Flask of water",
+                "description": "A sealed flask, heavy with the only currency that matters out here.",
+                "obtainable": false
+            },
+            "crysknife": {
+                "name": "Bone crysknife",
+                "description": "A milky blade ground from a tooth. It hums faintly when you hold it.",
+                "obtainable": false
             }
         },
         "npcs": {
             "guard": {
                 "name": "City Guard",
+                "role": "dialogue",
                 "description": "A stern-looking guard watching over the city.",
                 "dialogue": [
-                    "Stay safe, traveler.",
-                    "The roads can be dangerous."
-                ],
-                "stats": {
-                    "hp": 30
-                }
+                    "Watch yourself and everything will be ok traveler."
+                ]
             },
             "barman": {
                 "name": "Tavern keeper",
+                "role": "quest-giver",
                 "description": "A space-barman with small blue eyes.",
                 "dialogue": [
                     "Welcome to the Afterlife",
                     "Want to to drink something?"
                 ],
-                "stats": {
-                    "hp": 15
-                }
+                "quest": "bone"
             },
             "vendor": {
                 "name": "Spice reseller",
+                "role": "quest-giver",
                 "description": "A mysterious spice merchant with a piercing gaze.",
                 "dialogue": [
                     "Welcome to my shop traveller",
                     "Do you want some spice?"
                 ],
-                "stats": {
-                    "hp": 15
-                }
+                "quest": "hunter"
             },
             "hunter": {
                 "name": "Twin suns hunter",
+                "role": "enemy",
                 "description": "A space-nomad hunter with a long rifle.",
                 "dialogue": [
                     "I must not fear"
                 ],
                 "stats": {
-                    "hp": 40
-                }
+                    "hp": 40,
+                    "damage": 8
+                },
+                "drops": [
+                    "key"
+                ]
             },
             "dog": {
                 "name": "Stray dog",
-                "description": "A menacing stray desert dog",
+                "role": "dialogue",
+                "description": "A stray desert dog. He appears friendly",
                 "dialogue": [
-                    "Grrrrrrrrr"
-                ],
-                "stats": {
-                    "hp": 20
+                    "Wuf !"
+                ]
+            }
+        },
+        "quests": {
+            "bone": {
+                "name": "A bone for a friend",
+                "type": "deliver",
+                "giver": "barman",
+                "grants": "bone",
+                "target": "dog",
+                "reward": "crysknife",
+                "dialogue": {
+                    "offer": "There is a stray out in the suburbs that howls all night and empties my bar. Take this bone and go make a friend of him.",
+                    "active": "Still carrying that bone? The suburbs are north of the dune, traveler.",
+                    "complete": "Wuf ! (The dog buries the bone in the sand, digs once more, and nudges something pale towards your boot.)"
+                }
+            },
+            "hunter": {
+                "name": "The twin suns contract",
+                "type": "kill",
+                "giver": "vendor",
+                "target": "hunter",
+                "reward": "water",
+                "dialogue": {
+                    "offer": "The twin-suns hunter has been taxing my caravans from his nest north of the camp. End that, and I will pay you the only way worth being paid.",
+                    "active": "The hunter still breathes, and my caravans still pay him. Come back when that has changed.",
+                    "complete": "The dunes are quieter already. Here, drawn from my own cistern. He carried something of the mountain on him too, I hear."
                 }
             }
         }
