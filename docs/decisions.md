@@ -198,14 +198,109 @@ without a terminator, so round-tripping still works.
 
 ---
 
+## D10 — Quest design (RFC §6.1.2)
+
+§6.1.2 delegates quest progression, completion, rewards, dependencies and any
+extra commands to us, and requires the result to be justified. Below is the
+whole system; the two quests it runs are in `data/world.json`.
+
+### State model
+
+Per player, `map[questID]state` over three states — `available → active →
+completed`, the vocabulary already fixed in `protocol/payloads.go`. State lives
+in the player struct and dies with the connection: no persistence is required by
+the subject, so a quest reset on reconnect is a feature of the design, not a
+gap. `QUESTS` renders the map; `progress` is `"0/1"` while active and `"1/1"`
+once completed, since both our quests have a single objective.
+
+### Acquisition
+
+`QUEST <npc>` is the only entry point. Each quest-giver carries a `quest`
+back-pointer in the world data, so the lookup is direct. `406
+NO_QUEST_AVAILABLE` covers three cases: the NPC gives no quest, the player has
+already completed it, or the player already holds it — the RFC explicitly folds
+"already completed" into this code.
+
+Accepting a quest may hand the player an item, declared as `grants` on the
+quest. This is the only way an `obtainable: false` item enters the world: the
+flag means "cannot be picked up off the floor", not "does not exist".
+
+### Completion is automatic, and there are no extra commands
+
+**Decision.** Objectives are validated by hooks on the commands the RFC already
+defines. No `COMPLETE_QUEST`, no `ABANDON_QUEST`.
+
+| Type | Hook | Validation | Effect |
+|---|---|---|---|
+| `deliver` | `TALK <target>` | player's inventory holds `grants` | item consumed, `reward` granted, state → completed |
+| `kill` | NPC reaches 0 HP | dying NPC is the quest `target` | `reward` granted, state → completed |
+
+**Rationale.** `QUEST` and `QUESTS` already cover the whole RFC surface, and
+§2.6's interoperability rule makes every added command a liability — another
+group's client will never send `COMPLETE_QUEST`, so a quest that requires it
+would be uncompletable by anyone but us. Hooking the existing commands keeps the
+quest system invisible to the protocol: a peer's client completes our quests
+without knowing they exist. Manual completion would also need a failure code the
+RFC does not define.
+
+### Rewards, and why the key is a drop rather than a reward
+
+Rewards are item instances created into the player's inventory on completion —
+`crysknife` for the delivery, `water` for the contract. Neither exists anywhere
+else in the world, so uniqueness (§8.1) holds by construction.
+
+The hunter's `key` is deliberately **not** the kill quest's reward. It is an NPC
+`drops` entry: on death the key falls into the room. If it were the reward, a
+player who killed the hunter *before* taking the contract would leave the boss
+room permanently unreachable — the quest could never be accepted, the NPC being
+dead. As a floor drop it is recoverable by anyone, which is also what §8.2's
+item lifecycle describes.
+
+### Quest dialogue lives on the quest, keyed by state
+
+Quest-givers need more than one extra line, so a single `quest_dialogue` field
+on the NPC would not have been enough. Each quest carries:
+
+- `offer` — the giver, while the quest is available
+- `active` — the giver, while it is in progress (the reminder)
+- `complete` — spoken by whoever closes the quest: the **target** for a
+  `deliver` quest, the **giver** for a `kill` quest
+
+The NPC's own `dialogue` array is left for `TALK` and is unaffected by quest
+state, so a quest-giver reads the same to a player who never takes its quest.
+
+### Gated exits reuse 301 NO_EXIT
+
+A location may carry a `requires` map, `direction → item id`, parallel to its
+`exits` map — `door` requires `key` to go north into `boss`. Attempting a gated
+exit without the item answers `ERR 301 NO_EXIT`.
+
+**Rationale.** The RFC defines exactly one MOVE failure, and inventing a
+`DOOR_LOCKED` code would put a fourth non-RFC symbol on the wire (see D5) for a
+condition a peer's client could not render any better than "you can't go that
+way". The information the player actually needs belongs in the room prose, not
+in an error code, so the `door` description mentions the keyhole. `requires` is
+kept as a sibling of `exits` rather than turning exits into objects, so
+`exits` stays a plain `direction → room-id` map that copies straight into
+`protocol.Room.Exits` for the LOOK payload.
+
+---
+
+## D11 - Canonical ids are applied at load time
+
+The world JSON file keys entities bare ("start", "bone", "guard") and references them bare; the load() function re-keys every map to loc.start / item.bone / npc.guard and rewrites every reference to match : exit targets, requires values, room items, spawns.npc_type, NPC drops, and a quest's giver/target/grants/reward.
+
+**Rationale.** those ids go out on the wire in LOOK, MOVE, TAKE and INVENTORY, so they have to be canonical somewhere. The alternative (bare ids internally, prefixing at the wire boundary) would put a conversion in every handler and a matching strip on every inbound TAKE item.spice. Doing it once at load means data/world.json stays pleasant to hand-edit
+---
+
 ## Still open
 
 - **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn
   rules. Proposal in roadmap T3.7, to be ratified when the server's combat path
   is written.
-- **Quests** (§6.1.2) — progression tracking, auto vs manual completion, reward
-  delivery. Proposal in roadmap T2.3; the `available → active → completed`
-  vocabulary is already fixed in `protocol/payloads.go`.
+- **The `boss` room** — name, description and its NPC are still placeholders in
+  `data/world.json`; it is the only room the key unlocks, so it is what the
+  hunter contract ultimately pays for.
 - **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
   roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
