@@ -12,6 +12,7 @@ type Client struct {
 	conn net.Conn
 	out  chan string
 	name string // empty until CONNECT succeeds
+	room string // canonical room id; only meaningful once name != ""
 }
 
 func newClient(conn net.Conn) *Client {
@@ -77,6 +78,19 @@ func (h *Hub) Broadcast(line string) {
 	defer h.mu.Unlock()
 	for _, c := range h.clients {
 		c.send(line)
+	}
+}
+
+// BroadcastRoom enqueues line to every registered client currently in room,
+// skipping except if it is non-nil (typically the client who caused the
+// event, who already got a direct reply).
+func (h *Hub) BroadcastRoom(room, line string, except *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.clients {
+		if c.room == room && c != except {
+			c.send(line)
+		}
 	}
 }
 

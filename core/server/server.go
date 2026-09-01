@@ -7,17 +7,21 @@ import (
 	"strconv"
 
 	"github.com/Enelsep/42_TAP/core/protocol"
+	"github.com/Enelsep/42_TAP/core/world"
 )
 
-// Server owns the listening socket and the hub of connected clients.
+// Server owns the listening socket, the loaded world, and the hub of
+// connected clients.
 type Server struct {
-	addr string
-	hub  *Hub
+	addr  string
+	world *world.World
+	hub   *Hub
 }
 
-// New creates a Server that will listen on addr (e.g. ":4242").
-func New(addr string) *Server {
-	return &Server{addr: addr, hub: NewHub()}
+// New creates a Server that will listen on addr (e.g. ":4242") and place new
+// players in w's start room.
+func New(addr string, w *world.World) *Server {
+	return &Server{addr: addr, world: w, hub: NewHub()}
 }
 
 // Run listens on s.addr and blocks, accepting connections until the listener
@@ -52,7 +56,16 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Closing conn is writeLoop's job (after it drains c.out) so a
 		// reply queued right before disconnect is never lost to a race.
 		if c.name != "" {
+			// Remove state, *then* tell the room, *then* the whole server —
+			// the order the subject requires for a clean disconnect.
+			room := c.room
 			s.hub.Unregister(c)
+			s.hub.BroadcastRoom(room, protocol.FormatEvent(protocol.Event{
+				Scope:    protocol.EvtRoom,
+				Kind:     protocol.KindPresence,
+				Presence: protocol.PresenceLeave,
+				Player:   c.name,
+			}), nil)
 			s.broadcastStats()
 		} else {
 			close(c.out)
@@ -96,20 +109,31 @@ func (s *Server) handleConn(conn net.Conn) {
 	}
 }
 
-// handleConnect claims a name in the hub or replies 201 NAME_IN_USE.
+// handleConnect claims a name in the hub or replies 201 NAME_IN_USE, then
+// places the new player in the world's start room.
 func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 	if c.name != "" {
 		c.send(protocol.FormatErr(protocol.ErrNameInUse))
 		return
 	}
+	// Set both fields *before* Register publishes c into the hub map, so no
+	// other goroutine can ever observe c with a name but no room yet.
 	c.name = cmd.Arg
+	c.room = s.world.Start
 	if !s.hub.Register(c) {
 		c.name = ""
+		c.room = ""
 		c.send(protocol.FormatErr(protocol.ErrNameInUse))
 		return
 	}
-	log.Printf("tap server: %s is now %s", c.conn.RemoteAddr(), c.name)
+	log.Printf("tap server: %s is now %s in %s", c.conn.RemoteAddr(), c.name, c.room)
 	c.send(protocol.FormatOK("connected"))
+	s.hub.BroadcastRoom(c.room, protocol.FormatEvent(protocol.Event{
+		Scope:    protocol.EvtRoom,
+		Kind:     protocol.KindPresence,
+		Presence: protocol.PresenceEnter,
+		Player:   c.name,
+	}), c)
 	s.broadcastStats()
 }
 

@@ -23,7 +23,7 @@ func main() {
 	log.Printf("tap server: loaded %s — %d rooms, %d items, %d npcs, %d quests",
 		*path, len(w.Locations), len(w.Items), len(w.NPCs), len(w.Quests))
 
-	srv := server.New(*addr)
+	srv := server.New(*addr, w)
 	if err := srv.Run(); err != nil {
 		log.Fatalf("tap server: %v", err)
 	}
