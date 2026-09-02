@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 
+	"github.com/Enelsep/42_TAP/core/server"
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
@@ -22,5 +23,8 @@ func main() {
 	log.Printf("tap server: loaded %s — %d rooms, %d items, %d npcs, %d quests",
 		*path, len(w.Locations), len(w.Items), len(w.NPCs), len(w.Quests))
 
-	log.Printf("tap server: listening on %s is not wired yet (T3.1)", *addr)
+	srv := server.New(*addr)
+	if err := srv.Run(); err != nil {
+		log.Fatalf("tap server: %v", err)
+	}
 }
