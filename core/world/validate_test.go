@@ -1,6 +1,8 @@
 package world
 
 import (
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -84,7 +86,15 @@ func TestValidateCatches(t *testing.T) {
 			delete(w.Locations["loc.camp"].Exits, "north") // nest becomes an island
 		}},
 		{"one-way room", "cannot walk back to loc.start", func(w *World) {
-			w.Locations["loc.boss"].Exits = map[string]string{}
+			// Any room but the start: stripped of exits it can still be
+			// entered, never left. Picked by iteration so renaming a room in
+			// world.json cannot break this case.
+			for _, id := range slices.Sorted(maps.Keys(w.Locations)) {
+				if id != w.Start {
+					w.Locations[id].Exits = map[string]string{}
+					return
+				}
+			}
 		}},
 	}
 

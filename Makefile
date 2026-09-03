@@ -18,6 +18,7 @@ lint:
 
 test:
 	go test -race ./core/...
+	go test ./gui/...
 
 clean:
 	rm -rf bin gui/build
