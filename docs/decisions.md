@@ -293,6 +293,45 @@ The world JSON file keys entities bare ("start", "bone", "guard") and references
 **Rationale.** those ids go out on the wire in LOOK, MOVE, TAKE and INVENTORY, so they have to be canonical somewhere. The alternative (bare ids internally, prefixing at the wire boundary) would put a conversion in every handler and a matching strip on every inbound TAKE item.spice. Doing it once at load means data/world.json stays pleasant to hand-edit
 ---
 
+## D12 — Group id scheme, and two more RFC-silent edge cases
+
+**Gap.** §5.3 defines `GROUP CREATE` → `OK group=<id>` and `GROUP JOIN
+<group>` but never says what an `<id>` looks like, nor what happens when
+`GROUP INVITE`'s target isn't connected, nor when `GROUP JOIN`'s argument
+resolves to nothing (neither a live group id, per quirk #4's fallback, nor a
+player currently in one).
+
+**Decision.**
+
+- *Id scheme:* a group's id is its creator's own player name (`GROUP CREATE`
+  by `alice` → `OK group=alice`). If that id is already claimed by a
+  still-populated group — possible when `alice` left a group that other
+  members kept alive, then creates a new one — it is disambiguated with a
+  numeric suffix (`alice-2`, `alice-3`, …). A group is deleted the instant
+  its last member leaves, so the common case never hits the suffix.
+- *`GROUP INVITE <player>` to an unknown or offline name:* replies `OK`
+  regardless, same as `CHAT` to an empty room — the invite is fire-and-forget,
+  and the RFC defines no error for it.
+- *`GROUP JOIN <arg>` resolving to nothing:* a new non-RFC code,
+  `404 GROUP_NOT_FOUND` (`protocol.ErrGroupNotFound`), reusing 404 exactly as
+  quirk #3 does — disambiguated by symbol, not a fourth meaning for the bare
+  code.
+
+**Rationale.** The id scheme needs no coordination or counter: names are
+already unique in the hub (`Hub.Register`), so reusing one is free and the
+result (`OK group=alice`) is immediately legible to the player who typed
+`GROUP CREATE`, unlike an opaque generated id. Silently no-opping the invite
+matches how every other scope-with-nobody-listening already behaves in this
+codebase (`CHAT ROOM` in an empty room, `CHAT GROUP` with no group — see the
+handler). `GROUP_NOT_FOUND` follows D5's reasoning for adding a code at all:
+it sits in the RFC's own 4xx/404 range, so a peer applying the §7.3 severity
+rule classifies it correctly even without recognising the symbol.
+
+**Where.** `Hub.CreateGroup`, `Hub.JoinGroup`, `Hub.SendTo` in
+`core/server/hub.go`; `protocol.ErrGroupNotFound`.
+
+---
+
 ## Still open
 
 - **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn

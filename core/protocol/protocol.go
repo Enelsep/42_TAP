@@ -131,8 +131,9 @@ const (
 	CodeNotConnected = 202
 	CodeBadRequest   = 400
 
-	SymNotConnected = "NOT_CONNECTED"
-	SymBadRequest   = "BAD_REQUEST"
+	SymNotConnected  = "NOT_CONNECTED"
+	SymBadRequest    = "BAD_REQUEST"
+	SymGroupNotFound = "GROUP_NOT_FOUND"
 )
 
 var (
@@ -140,6 +141,10 @@ var (
 	ErrNotConnected = &Error{CodeNotConnected, SymNotConnected}
 	// unparsable line: unknown verb, missing or invalid argument, over MaxLineLen
 	ErrBadRequest = &Error{CodeBadRequest, SymBadRequest}
+	// GROUP JOIN <arg>: arg is neither a live group id nor a connected
+	// player currently in one (D12). Reuses 404, disambiguated by symbol
+	// like the RFC's own ITEM_NOT_FOUND/NPC_NOT_FOUND pair (quirk #3).
+	ErrGroupNotFound = &Error{CodeNotFound, SymGroupNotFound}
 )
 
 // EventPrefix starts every event line: "EVT <event-type> <event-data>" (§7.1).
