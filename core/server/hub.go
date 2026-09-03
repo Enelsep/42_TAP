@@ -2,6 +2,7 @@ package server
 
 import (
 	"net"
+	"slices"
 	"sync"
 )
 
@@ -99,4 +100,27 @@ func (h *Hub) Count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.clients)
+}
+
+// PlayersIn returns the names of every client currently in room, sorted.
+func (h *Hub) PlayersIn(room string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	players := []string{}
+	for name, c := range h.clients {
+		if c.room == room {
+			players = append(players, name)
+		}
+	}
+	slices.Sort(players)
+	return players
+}
+
+// SetRoom moves c to room. Every write to c.room must go through here (never
+// c.room = ... directly) once c is registered, so a concurrent BroadcastRoom
+// or PlayersIn reading c.room under h.mu never races the write.
+func (h *Hub) SetRoom(c *Client, room string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	c.room = room
 }

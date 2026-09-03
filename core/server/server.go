@@ -2,9 +2,11 @@ package server
 
 import (
 	"bufio"
+	"encoding/json"
 	"log"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/Enelsep/42_TAP/core/protocol"
 	"github.com/Enelsep/42_TAP/core/world"
@@ -102,6 +104,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		case protocol.VerbWho:
 			c.send(protocol.FormatOK("players=" + strconv.Itoa(s.hub.Count())))
 
+		case protocol.VerbLook:
+			s.handleLook(c)
+
+		case protocol.VerbMove:
+			s.handleMove(c, cmd)
+
 		default:
 			log.Printf("tap server: %s -> %+v", remote, cmd)
 			c.send(protocol.FormatOK(""))
@@ -135,6 +143,81 @@ func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 		Player:   c.name,
 	}), c)
 	s.broadcastStats()
+}
+
+// handleLook replies with the current room, who else is there, and what's
+// on the floor. The world's static item/NPC placement is used as-is for now
+// — dynamic per-room item state (what TAKE/DROP actually mutate) arrives
+// with T3.5.
+func (s *Server) handleLook(c *Client) {
+	loc := s.world.Locations[c.room]
+
+	reply := protocol.LookReply{
+		Room: protocol.Room{
+			ID:          loc.ID,
+			Name:        loc.Name,
+			Description: loc.Description,
+			Exits:       loc.Exits,
+		},
+		Players: s.hub.PlayersIn(c.room),
+		Items:   nonNil(loc.Items),
+		NPCs:    []string{},
+	}
+	if loc.Spawns != nil {
+		reply.NPCs = []string{loc.Spawns.NPCType}
+	}
+
+	data, err := json.Marshal(reply)
+	if err != nil {
+		log.Printf("tap server: marshal LookReply for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+}
+
+// handleMove validates the exit, moves c under the hub's lock, and announces
+// the swap to both rooms — in the order the RFC example shows: reply to the
+// mover first, then LEAVE the old room, then ENTER the new one.
+func (s *Server) handleMove(c *Client, cmd protocol.Command) {
+	loc := s.world.Locations[c.room]
+	dir := strings.ToLower(strings.TrimSpace(cmd.Arg))
+
+	target, ok := loc.Exits[dir]
+	if !ok {
+		c.send(protocol.FormatErr(protocol.ErrNoExit))
+		return
+	}
+	if _, gated := loc.Requires[dir]; gated {
+		// TODO(T3.5): let this through once inventory exists and c carries
+		// the required item. Until then the exit stays closed to everyone.
+		c.send(protocol.FormatErr(protocol.ErrNoExit))
+		return
+	}
+
+	old := c.room
+	s.hub.SetRoom(c, target)
+	c.send(protocol.FormatOK("room=" + target))
+	s.hub.BroadcastRoom(old, protocol.FormatEvent(protocol.Event{
+		Scope:    protocol.EvtRoom,
+		Kind:     protocol.KindPresence,
+		Presence: protocol.PresenceLeave,
+		Player:   c.name,
+	}), nil)
+	s.hub.BroadcastRoom(target, protocol.FormatEvent(protocol.Event{
+		Scope:    protocol.EvtRoom,
+		Kind:     protocol.KindPresence,
+		Presence: protocol.PresenceEnter,
+		Player:   c.name,
+	}), c)
+}
+
+// nonNil turns a nil slice into an empty one so it marshals as "[]", never
+// "null" — the subject's own examples always show "[]".
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // broadcastStats pushes the current player count to every connected client.
