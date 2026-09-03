@@ -69,15 +69,26 @@ func (h *Hub) Register(c *Client) bool {
 	return true
 }
 
-// Unregister removes c and closes its outbound channel, which stops its
-// writeLoop goroutine.
+// Unregister removes c from every index that can reach it — the client
+// registry and, if it was in one, its group — then closes its outbound
+// channel, which stops its writeLoop goroutine. A client left behind in any
+// index is a ghost: the next broadcast to it sends on a closed channel and
+// panics the whole process, not just that connection.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.clients[c.name] == c {
-		delete(h.clients, c.name)
-		close(c.out)
+	if h.clients[c.name] != c {
+		return
 	}
+	delete(h.clients, c.name)
+	if g := h.groups[c.group]; g != nil {
+		delete(g, c.name)
+		if len(g) == 0 {
+			delete(h.groups, c.group)
+		}
+	}
+	c.group = ""
+	close(c.out)
 }
 
 // Broadcast enqueues line to every registered client.
@@ -90,7 +101,7 @@ func (h *Hub) Broadcast(line string) {
 }
 
 // BroadcastRoom enqueues line to every registered client currently in room,
-// skipping except if it is non-nil (typically the client who caused the
+// skipping except when it is non-nil (typically the client who caused the
 // event, who already got a direct reply).
 func (h *Hub) BroadcastRoom(room, line string, except *Client) {
 	h.mu.Lock()

@@ -332,6 +332,27 @@ rule classifies it correctly even without recognising the symbol.
 
 ---
 
+## D13 — Presence-style events exclude the actor; CHAT includes them
+
+**Choice.** `ENTER`/`LEAVE` (room and group) are broadcast to everyone
+*except* the player who moved, joined, or left. Every `CHAT` scope
+(`GLOBAL`/`ROOM`/`GROUP`) is broadcast *including* the sender.
+
+**Rationale.** The two cases aren't parallel. A move/join/leave already gets
+a direct reply confirming the action (`OK room=<id>`, `OK group=<id>`, plain
+`OK`) — re-announcing it back to the same player as an event would be a
+redundant echo of something they already know they just did. `CHAT` has no
+such reply carrying the message: per §5.2.1's reply row, the success reply is
+a bare `OK`, and the RFC's own example transcript shows the message text
+reaching the sender only through the `EVT ... CHAT` broadcast (`D2`'s
+transcript). Excluding the sender there would mean their own client never
+displays what they just typed.
+
+**Where.** `Hub.BroadcastRoom`/`BroadcastGroup` calls in
+`core/server/server.go`: `except: c` for presence, `except: nil` for chat.
+
+---
+
 ## Still open
 
 - **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn

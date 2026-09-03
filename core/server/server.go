@@ -58,9 +58,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Closing conn is writeLoop's job (after it drains c.out) so a
 		// reply queued right before disconnect is never lost to a race.
 		if c.name != "" {
-			// Remove state, *then* tell the room, *then* the whole server —
-			// the order the subject requires for a clean disconnect.
-			room := c.room
+			// Remove state, *then* tell the room (and group, if any), *then*
+			// the whole server — the order the subject requires for a clean
+			// disconnect. room and group must be read before Unregister,
+			// which clears the latter.
+			room, group := c.room, c.group
 			s.hub.Unregister(c)
 			s.hub.BroadcastRoom(room, protocol.FormatEvent(protocol.Event{
 				Scope:    protocol.EvtRoom,
@@ -68,6 +70,11 @@ func (s *Server) handleConn(conn net.Conn) {
 				Presence: protocol.PresenceLeave,
 				Player:   c.name,
 			}), nil)
+			if group != "" {
+				s.hub.BroadcastGroup(group, protocol.FormatEvent(protocol.Event{
+					Scope: protocol.EvtGroup, Kind: protocol.KindLeave, Player: c.name,
+				}), nil)
+			}
 			s.broadcastStats()
 		} else {
 			close(c.out)
