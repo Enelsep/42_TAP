@@ -23,7 +23,7 @@ type Server struct {
 // New creates a Server that will listen on addr (e.g. ":4242") and place new
 // players in w's start room.
 func New(addr string, w *world.World) *Server {
-	return &Server{addr: addr, world: w, hub: NewHub()}
+	return &Server{addr: addr, world: w, hub: NewHub(w)}
 }
 
 // Run listens on s.addr and blocks, accepting connections until the listener
@@ -123,6 +123,15 @@ func (s *Server) handleConn(conn net.Conn) {
 		case protocol.VerbGroup:
 			s.handleGroup(c, cmd)
 
+		case protocol.VerbTake:
+			s.handleTake(c, cmd)
+
+		case protocol.VerbDrop:
+			s.handleDrop(c, cmd)
+
+		case protocol.VerbInventory:
+			s.handleInventory(c)
+
 		default:
 			log.Printf("tap server: %s -> %+v", remote, cmd)
 			c.send(protocol.FormatOK(""))
@@ -159,9 +168,8 @@ func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 }
 
 // handleLook replies with the current room, who else is there, and what's
-// on the floor. The world's static item/NPC placement is used as-is for now
-// — dynamic per-room item state (what TAKE/DROP actually mutate) arrives
-// with T3.5.
+// on the floor — the floor comes from the hub's dynamic state, which is what
+// TAKE/DROP actually mutate; NPC placement is still the world's static data.
 func (s *Server) handleLook(c *Client) {
 	loc := s.world.Locations[c.room]
 
@@ -173,7 +181,7 @@ func (s *Server) handleLook(c *Client) {
 			Exits:       loc.Exits,
 		},
 		Players: s.hub.PlayersIn(c.room),
-		Items:   nonNil(loc.Items),
+		Items:   nonNil(s.hub.RoomItems(c.room)),
 		NPCs:    []string{},
 	}
 	if loc.Spawns != nil {
@@ -311,6 +319,38 @@ func (s *Server) handleGroup(c *Client, cmd protocol.Command) {
 			Scope: protocol.EvtGroup, Kind: protocol.KindInvite, Player: c.name,
 		}))
 	}
+}
+
+// handleTake moves an item from c's room to c's inventory, resolved by
+// canonical id or case-insensitive display name (RFC §8.3/8.4).
+func (s *Server) handleTake(c *Client, cmd protocol.Command) {
+	id, ok := s.hub.TakeItem(c, c.room, cmd.Arg)
+	if !ok {
+		c.send(protocol.FormatErr(protocol.ErrItemNotFound))
+		return
+	}
+	c.send(protocol.FormatOK("taken=" + id))
+}
+
+// handleDrop moves an item from c's inventory to c's room, same resolution
+// rule as TAKE.
+func (s *Server) handleDrop(c *Client, cmd protocol.Command) {
+	id, ok := s.hub.DropItem(c, c.room, cmd.Arg)
+	if !ok {
+		c.send(protocol.FormatErr(protocol.ErrItemNotInInv))
+		return
+	}
+	c.send(protocol.FormatOK("dropped=" + id))
+}
+
+// handleInventory replies with the canonical ids c is carrying.
+func (s *Server) handleInventory(c *Client) {
+	data, err := json.Marshal(s.hub.Inventory(c))
+	if err != nil {
+		log.Printf("tap server: marshal inventory for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
 }
 
 // nonNil turns a nil slice into an empty one so it marshals as "[]", never
