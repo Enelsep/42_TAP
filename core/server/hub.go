@@ -3,6 +3,7 @@ package server
 import (
 	"net"
 	"slices"
+	"strconv"
 	"sync"
 )
 
@@ -10,10 +11,11 @@ import (
 // drained by its own writer goroutine, so a slow or dead client can never
 // block a broadcast to everyone else.
 type Client struct {
-	conn net.Conn
-	out  chan string
-	name string // empty until CONNECT succeeds
-	room string // canonical room id; only meaningful once name != ""
+	conn  net.Conn
+	out   chan string
+	name  string // empty until CONNECT succeeds
+	room  string // canonical room id; only meaningful once name != ""
+	group string // group id; empty means "not in a group"
 }
 
 func newClient(conn net.Conn) *Client {
@@ -40,14 +42,19 @@ func (c *Client) writeLoop() {
 	}
 }
 
-// Hub is the mutex-guarded registry of connected, named clients.
+// Hub is the mutex-guarded registry of connected, named clients, and of the
+// groups they've formed.
 type Hub struct {
 	mu      sync.Mutex
 	clients map[string]*Client
+	groups  map[string]map[string]*Client // group id -> members, by name
 }
 
 func NewHub() *Hub {
-	return &Hub{clients: make(map[string]*Client)}
+	return &Hub{
+		clients: make(map[string]*Client),
+		groups:  make(map[string]map[string]*Client),
+	}
 }
 
 // Register adds c under c.name. It refuses and returns false if that name
@@ -62,15 +69,26 @@ func (h *Hub) Register(c *Client) bool {
 	return true
 }
 
-// Unregister removes c and closes its outbound channel, which stops its
-// writeLoop goroutine.
+// Unregister removes c from every index that can reach it — the client
+// registry and, if it was in one, its group — then closes its outbound
+// channel, which stops its writeLoop goroutine. A client left behind in any
+// index is a ghost: the next broadcast to it sends on a closed channel and
+// panics the whole process, not just that connection.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.clients[c.name] == c {
-		delete(h.clients, c.name)
-		close(c.out)
+	if h.clients[c.name] != c {
+		return
 	}
+	delete(h.clients, c.name)
+	if g := h.groups[c.group]; g != nil {
+		delete(g, c.name)
+		if len(g) == 0 {
+			delete(h.groups, c.group)
+		}
+	}
+	c.group = ""
+	close(c.out)
 }
 
 // Broadcast enqueues line to every registered client.
@@ -83,7 +101,7 @@ func (h *Hub) Broadcast(line string) {
 }
 
 // BroadcastRoom enqueues line to every registered client currently in room,
-// skipping except if it is non-nil (typically the client who caused the
+// skipping except when it is non-nil (typically the client who caused the
 // event, who already got a direct reply).
 func (h *Hub) BroadcastRoom(room, line string, except *Client) {
 	h.mu.Lock()
@@ -123,4 +141,78 @@ func (h *Hub) SetRoom(c *Client, room string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c.room = room
+}
+
+// SendTo enqueues line to the named client, if one is currently registered.
+// This — never handing out a *Client to use unlocked — is what keeps a send
+// from racing a concurrent Unregister's close(c.out), which would panic.
+func (h *Hub) SendTo(name, line string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if c, ok := h.clients[name]; ok {
+		c.send(line)
+	}
+}
+
+// CreateGroup makes c the sole member of a fresh group and returns its id.
+// The id is c's own name, disambiguated with a numeric suffix if a
+// still-populated group already claims it — possible if c left a group that
+// other members kept alive (GroupNotFound/D12 is the mirror case).
+func (h *Hub) CreateGroup(c *Client) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id := c.name
+	for n := 2; h.groups[id] != nil; n++ {
+		id = c.name + "-" + strconv.Itoa(n)
+	}
+	h.groups[id] = map[string]*Client{c.name: c}
+	c.group = id
+	return id
+}
+
+// JoinGroup resolves arg as a group id, falling back to the current group of
+// the player named arg (D12/quirk #4: GROUP INVITE's event carries only the
+// inviter's name, so an invitee has no id to pass — this lets
+// "GROUP JOIN <inviter>" work anyway). ok is false if neither resolves.
+func (h *Hub) JoinGroup(c *Client, arg string) (id string, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id = arg
+	if h.groups[id] == nil {
+		if target := h.clients[arg]; target != nil && target.group != "" {
+			id = target.group
+		}
+	}
+	if h.groups[id] == nil {
+		return "", false
+	}
+	h.groups[id][c.name] = c
+	c.group = id
+	return id, true
+}
+
+// LeaveGroup removes c from its group, deleting the group once it's empty,
+// and returns the id c was in.
+func (h *Hub) LeaveGroup(c *Client) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	id := c.group
+	delete(h.groups[id], c.name)
+	if len(h.groups[id]) == 0 {
+		delete(h.groups, id)
+	}
+	c.group = ""
+	return id
+}
+
+// BroadcastGroup enqueues line to every member of group, skipping except if
+// it is non-nil.
+func (h *Hub) BroadcastGroup(group, line string, except *Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, c := range h.groups[group] {
+		if c != except {
+			c.send(line)
+		}
+	}
 }

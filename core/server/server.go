@@ -58,9 +58,11 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Closing conn is writeLoop's job (after it drains c.out) so a
 		// reply queued right before disconnect is never lost to a race.
 		if c.name != "" {
-			// Remove state, *then* tell the room, *then* the whole server —
-			// the order the subject requires for a clean disconnect.
-			room := c.room
+			// Remove state, *then* tell the room (and group, if any), *then*
+			// the whole server — the order the subject requires for a clean
+			// disconnect. room and group must be read before Unregister,
+			// which clears the latter.
+			room, group := c.room, c.group
 			s.hub.Unregister(c)
 			s.hub.BroadcastRoom(room, protocol.FormatEvent(protocol.Event{
 				Scope:    protocol.EvtRoom,
@@ -68,6 +70,11 @@ func (s *Server) handleConn(conn net.Conn) {
 				Presence: protocol.PresenceLeave,
 				Player:   c.name,
 			}), nil)
+			if group != "" {
+				s.hub.BroadcastGroup(group, protocol.FormatEvent(protocol.Event{
+					Scope: protocol.EvtGroup, Kind: protocol.KindLeave, Player: c.name,
+				}), nil)
+			}
 			s.broadcastStats()
 		} else {
 			close(c.out)
@@ -109,6 +116,12 @@ func (s *Server) handleConn(conn net.Conn) {
 
 		case protocol.VerbMove:
 			s.handleMove(c, cmd)
+
+		case protocol.VerbChat:
+			s.handleChat(c, cmd)
+
+		case protocol.VerbGroup:
+			s.handleGroup(c, cmd)
 
 		default:
 			log.Printf("tap server: %s -> %+v", remote, cmd)
@@ -209,6 +222,95 @@ func (s *Server) handleMove(c *Client, cmd protocol.Command) {
 		Presence: protocol.PresenceEnter,
 		Player:   c.name,
 	}), c)
+}
+
+// handleChat replies OK, then broadcasts the corresponding EVT *CHAT to the
+// requested scope — sender included, per the RFC's own example transcript.
+func (s *Server) handleChat(c *Client, cmd protocol.Command) {
+	c.send(protocol.FormatOK(""))
+
+	var scope protocol.EventScope
+	switch cmd.Scope {
+	case protocol.ChatGlobal:
+		scope = protocol.EvtGlobal
+	case protocol.ChatRoom:
+		scope = protocol.EvtRoom
+	case protocol.ChatGroup:
+		scope = protocol.EvtGroup
+	}
+	line := protocol.FormatEvent(protocol.Event{
+		Scope:   scope,
+		Kind:    protocol.KindChat,
+		Player:  c.name,
+		Message: cmd.Arg,
+	})
+
+	switch cmd.Scope {
+	case protocol.ChatGlobal:
+		s.hub.Broadcast(line)
+	case protocol.ChatRoom:
+		s.hub.BroadcastRoom(c.room, line, nil)
+	case protocol.ChatGroup:
+		// No group to speak to is not a protocol error (the RFC defines none
+		// for it): same as talking in an empty room, the OK stands and
+		// nothing goes out. See D12.
+		if c.group != "" {
+			s.hub.BroadcastGroup(c.group, line, nil)
+		}
+	}
+}
+
+// handleGroup dispatches the GROUP subcommands. See D12 for the id scheme
+// and the two RFC-silent edge cases (GROUP INVITE to an offline/unknown
+// player, GROUP JOIN with nothing to resolve to).
+func (s *Server) handleGroup(c *Client, cmd protocol.Command) {
+	switch cmd.Sub {
+	case protocol.GroupCreate:
+		if c.group != "" {
+			c.send(protocol.FormatErr(protocol.ErrAlreadyInGroup))
+			return
+		}
+		id := s.hub.CreateGroup(c)
+		c.send(protocol.FormatOK("group=" + id))
+
+	case protocol.GroupJoin:
+		if c.group != "" {
+			c.send(protocol.FormatErr(protocol.ErrAlreadyInGroup))
+			return
+		}
+		id, ok := s.hub.JoinGroup(c, cmd.Arg)
+		if !ok {
+			c.send(protocol.FormatErr(protocol.ErrGroupNotFound))
+			return
+		}
+		c.send(protocol.FormatOK("group=" + id))
+		s.hub.BroadcastGroup(id, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtGroup, Kind: protocol.KindJoin, Player: c.name,
+		}), c)
+
+	case protocol.GroupLeave:
+		if c.group == "" {
+			c.send(protocol.FormatErr(protocol.ErrNotInGroup))
+			return
+		}
+		id := s.hub.LeaveGroup(c)
+		c.send(protocol.FormatOK(""))
+		s.hub.BroadcastGroup(id, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtGroup, Kind: protocol.KindLeave, Player: c.name,
+		}), nil)
+
+	case protocol.GroupInvite:
+		if c.group == "" {
+			c.send(protocol.FormatErr(protocol.ErrNotInGroup))
+			return
+		}
+		c.send(protocol.FormatOK(""))
+		// D12: no RFC error for "no such player" — fire-and-forget, like
+		// inviting someone who isn't listening.
+		s.hub.SendTo(cmd.Arg, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtGroup, Kind: protocol.KindInvite, Player: c.name,
+		}))
+	}
 }
 
 // nonNil turns a nil slice into an empty one so it marshals as "[]", never
