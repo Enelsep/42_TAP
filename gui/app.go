@@ -265,8 +265,6 @@ func (a *App) Chat(scope, message string) error {
 	return err
 }
 
-// Who returns the server-wide player count (§5.2.2; see D2 on why this is a
-// count and not the subject PDF's object).
 func (a *App) Who() (int, error) {
 	data, err := a.value(protocol.Command{Verb: protocol.VerbWho}, "players")
 	if err != nil {
