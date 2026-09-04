@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":4242", "listen address")
+	addr := flag.String("addr", ":4241", "listen address")
 	path := flag.String("world", "data/world.json", "world data file")
 	flag.Parse()
 

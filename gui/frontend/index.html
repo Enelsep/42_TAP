@@ -1,125 +1,129 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <meta charset="UTF-8"/>
-    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta charset="UTF-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
     <title>The Answer Protocol</title>
 </head>
+
 <body>
-<div id="app">
+    <div id="app">
 
-    <!-- room background, cross-faded on every move -->
-    <div class="backdrop" id="bg-a"></div>
-    <div class="backdrop" id="bg-b"></div>
-    <div class="scrim"></div>
+        <!-- room background, cross-faded on every move -->
+        <div class="backdrop" id="bg-a"></div>
+        <div class="backdrop" id="bg-b"></div>
+        <div class="scrim"></div>
 
-    <!-- connection gate, replaced by the HUD once CONNECT succeeds -->
-    <div class="overlay" id="connect">
-        <form class="card" id="connect-form">
-            <h1>The Answer Protocol</h1>
-            <p class="sub">a shared world of sand and signal</p>
-            <label>Server<input id="addr" value="localhost:4242" autocomplete="off" spellcheck="false"/></label>
-            <label>Name<input id="player-name" placeholder="alice" autocomplete="off" spellcheck="false"/></label>
-            <button class="primary" type="submit">Enter</button>
-            <p class="error" id="connect-error"></p>
-        </form>
-    </div>
-
-    <main hidden id="hud">
-
-        <header id="topbar">
-            <div class="panel identity">
-                <div class="line">
-                    <span class="name" id="hud-name">—</span>
-                    <span class="room" id="hud-room">—</span>
-                </div>
-                <div class="hp" title="health">
-                    <div class="hp-fill" id="hp-fill"></div>
-                    <span class="hp-text" id="hp-text">—</span>
-                </div>
-            </div>
-            <div class="top-right">
-                <div class="panel counters">
-                    <span title="players in this room">room <b id="count-room">0</b></span>
-                    <span title="players on the server">server <b id="count-server">0</b></span>
-                </div>
-                <button class="danger" id="btn-quit" title="QUIT">QUIT</button>
-            </div>
-        </header>
-
-        <aside id="left">
-            <section class="panel">
-                <h2>Room</h2>
-                <p class="desc" id="room-desc"></p>
-                <h3>Characters</h3>
-                <ul class="list" id="room-npcs"></ul>
-                <h3>On the ground</h3>
-                <ul class="list" id="room-items"></ul>
-            </section>
-            <section class="panel">
-                <h2>Inventory</h2>
-                <ul class="list" id="inventory"></ul>
-            </section>
-            <section class="panel log-panel">
-                <h2>Log</h2>
-                <div class="log" id="log"></div>
-            </section>
-        </aside>
-
-        <!-- chat: right side, between the QUIT button and the bottom band -->
-        <aside class="panel" id="chat">
-            <div class="tabs" id="chat-tabs">
-                <button class="active" data-scope="ROOM">Room</button>
-                <button data-scope="GLOBAL">Global</button>
-                <button data-scope="GROUP">Group</button>
-            </div>
-            <div class="chat-log" id="chat-log"></div>
-            <form id="chat-form">
-                <input id="chat-input" placeholder="say something…" autocomplete="off"/>
-                <button type="submit">↵</button>
+        <!-- connection gate, replaced by the HUD once CONNECT succeeds -->
+        <div class="overlay" id="connect">
+            <form class="card" id="connect-form">
+                <h1>The Answer Protocol</h1>
+                <p class="sub">a shared world of sand and signal</p>
+                <label>Server<input id="addr" value="localhost:4242" autocomplete="off" spellcheck="false" /></label>
+                <label>Name<input id="player-name" placeholder="alice" autocomplete="off" spellcheck="false" /></label>
+                <button class="primary" type="submit">Enter</button>
+                <p class="error" id="connect-error"></p>
             </form>
-        </aside>
-
-        <section id="controls">
-            <div class="compass" id="compass">
-                <button data-dir="north" style="grid-area:n">north</button>
-                <button data-dir="west" style="grid-area:w">west</button>
-                <span class="rose" style="grid-area:c">✦</span>
-                <button data-dir="east" style="grid-area:e">east</button>
-                <button data-dir="south" style="grid-area:s">south</button>
-            </div>
-            <div class="actions" id="actions">
-                <button data-action="LOOK">Look</button>
-                <button data-action="MOVE">Move</button>
-                <button data-action="STATUS">Status</button>
-                <button data-action="TAKE">Take</button>
-                <button data-action="DROP">Drop</button>
-                <button data-action="TALK">Talk</button>
-                <button data-action="ATTACK">Attack</button>
-                <button data-action="QUEST">Quest</button>
-                <button data-action="QUESTS">Quests</button>
-                <button data-action="WHO">Who</button>
-                <button data-action="GROUP">Group</button>
-            </div>
-        </section>
-
-    </main>
-
-    <!-- target chooser: items, NPCs, directions, group actions -->
-    <div class="overlay" hidden id="picker">
-        <div class="card">
-            <h2 id="picker-title"></h2>
-            <div class="choices" id="picker-choices"></div>
-            <form id="picker-form">
-                <input id="picker-input" placeholder="…or type a name" autocomplete="off"/>
-                <button type="submit">OK</button>
-            </form>
-            <button class="ghost" id="picker-cancel" type="button">cancel</button>
         </div>
-    </div>
 
-    <div id="toasts"></div>
-</div>
-<script src="./src/main.js" type="module"></script>
+        <main hidden id="hud">
+
+            <header id="topbar">
+                <div class="panel identity">
+                    <div class="line">
+                        <span class="name" id="hud-name">—</span>
+                        <span class="room" id="hud-room">—</span>
+                    </div>
+                    <div class="hp" title="health">
+                        <div class="hp-fill" id="hp-fill"></div>
+                        <span class="hp-text" id="hp-text">—</span>
+                    </div>
+                </div>
+                <div class="top-right">
+                    <div class="panel counters">
+                        <span title="players in this room">room <b id="count-room">0</b></span>
+                        <span title="players on the server">server <b id="count-server">0</b></span>
+                    </div>
+                    <button id="btn-mute" title="mute room music">music</button>
+                    <button class="danger" id="btn-quit" title="QUIT">QUIT</button>
+                </div>
+            </header>
+
+            <aside id="left">
+                <section class="panel">
+                    <h2>Room</h2>
+                    <p class="desc" id="room-desc"></p>
+                    <h3>Characters</h3>
+                    <ul class="list" id="room-npcs"></ul>
+                    <h3>On the ground</h3>
+                    <ul class="list" id="room-items"></ul>
+                </section>
+                <section class="panel">
+                    <h2>Inventory</h2>
+                    <ul class="list" id="inventory"></ul>
+                </section>
+                <section class="panel log-panel">
+                    <h2>Log</h2>
+                    <div class="log" id="log"></div>
+                </section>
+            </aside>
+
+            <!-- chat: right side, between the QUIT button and the bottom band -->
+            <aside class="panel" id="chat">
+                <div class="tabs" id="chat-tabs">
+                    <button class="active" data-scope="ROOM">Room</button>
+                    <button data-scope="GLOBAL">Global</button>
+                    <button data-scope="GROUP">Group</button>
+                </div>
+                <div class="chat-log" id="chat-log"></div>
+                <form id="chat-form">
+                    <input id="chat-input" placeholder="say something…" autocomplete="off" />
+                    <button type="submit">↵</button>
+                </form>
+            </aside>
+
+            <section id="controls">
+                <div class="compass" id="compass">
+                    <button data-dir="north" style="grid-area:n">north</button>
+                    <button data-dir="west" style="grid-area:w">west</button>
+                    <span class="rose" style="grid-area:c">✦</span>
+                    <button data-dir="east" style="grid-area:e">east</button>
+                    <button data-dir="south" style="grid-area:s">south</button>
+                </div>
+                <div class="actions" id="actions">
+                    <button data-action="LOOK">Look</button>
+                    <button data-action="MOVE">Move</button>
+                    <button data-action="STATUS">Status</button>
+                    <button data-action="TAKE">Take</button>
+                    <button data-action="DROP">Drop</button>
+                    <button data-action="TALK">Talk</button>
+                    <button data-action="ATTACK">Attack</button>
+                    <button data-action="QUEST">Quest</button>
+                    <button data-action="QUESTS">Quests</button>
+                    <button data-action="WHO">Who</button>
+                    <button data-action="GROUP">Group</button>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- target chooser: items, NPCs, directions, group actions -->
+        <div class="overlay" hidden id="picker">
+            <div class="card">
+                <h2 id="picker-title"></h2>
+                <div class="choices" id="picker-choices"></div>
+                <form id="picker-form">
+                    <input id="picker-input" placeholder="…or type a name" autocomplete="off" />
+                    <button type="submit">OK</button>
+                </form>
+                <button class="ghost" id="picker-cancel" type="button">cancel</button>
+            </div>
+        </div>
+
+        <div id="toasts"></div>
+    </div>
+    <script src="./src/main.js" type="module"></script>
 </body>
+
 </html>

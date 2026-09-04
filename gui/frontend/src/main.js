@@ -17,6 +17,14 @@ import square from './assets/images/square.png';
 import start from './assets/images/start.png';
 import suburbs from './assets/images/suburbs.png';
 
+import ambienceTrack from './assets/music/ambience.mp3';
+import barTrack from './assets/music/bar.mp3';
+import combatTrack from './assets/music/combat.mp3';
+import doorTrack from './assets/music/door.mp3';
+import shopTrack from './assets/music/shop.mp3';
+import squareTrack from './assets/music/square.mp3';
+import startTrack from './assets/music/start.mp3';
+
 // Room id -> backdrop. Keyed by the canonical ids the server puts on the wire,
 // so a room the world adds later simply shows no art instead of breaking.
 const BACKDROPS = {
@@ -24,6 +32,16 @@ const BACKDROPS = {
     'loc.door': door, 'loc.nest': nest, 'loc.shop': shop, 'loc.square': square,
     'loc.start': start, 'loc.suburbs': suburbs,
 };
+
+// Combat music follows the two enemies. Every other room plays its own track
+// where one exists, and the shared ambience where it does not.
+const TRACKS = {
+    'loc.nest': combatTrack, 'loc.bossroom': combatTrack,
+    'loc.bar': barTrack, 'loc.door': doorTrack, 'loc.shop': shopTrack,
+    'loc.square': squareTrack, 'loc.start': startTrack,
+};
+
+const MUSIC_VOLUME = 0.35;
 
 const DIRECTIONS = ['north', 'south', 'east', 'west'];
 const SCOPES = ['ROOM', 'GLOBAL', 'GROUP'];
@@ -82,6 +100,85 @@ async function guard(fn) {
 
 // --- rendering ------------------------------------------------------------
 
+// --- room music ------------------------------------------------------------
+
+const music = new Audio();
+music.loop = true;
+music.volume = 0;
+
+let currentTrack = null;
+let muted = false;
+let awaitingGesture = false;
+
+function fadeMusic(target, ms) {
+    return new Promise((resolve) => {
+        const from = music.volume;
+        const started = performance.now();
+        const step = (now) => {
+            const k = Math.min(1, (now - started) / ms);
+            music.volume = Math.max(0, Math.min(1, from + (target - from) * k));
+            if (k < 1) requestAnimationFrame(step); else resolve();
+        };
+        requestAnimationFrame(step);
+    });
+}
+
+// A webview may refuse to start audio without a gesture. Entering the world is
+// itself a click, so this rarely fires — but if it does, wait for the next one
+// rather than leaving the world silent for good.
+function resumeOnGesture() {
+    if (awaitingGesture) return;
+    awaitingGesture = true;
+    const resume = () => {
+        awaitingGesture = false;
+        document.removeEventListener('pointerdown', resume);
+        document.removeEventListener('keydown', resume);
+        if (!muted) music.play().then(() => fadeMusic(MUSIC_VOLUME, 600)).catch(() => { });
+    };
+    document.addEventListener('pointerdown', resume);
+    document.addEventListener('keydown', resume);
+}
+
+async function playRoomMusic(roomID) {
+    const track = TRACKS[roomID] || ambienceTrack;
+    if (track === currentTrack) return; // same track: let it keep looping
+    currentTrack = track;
+
+    // Swap synchronously and fade only the way in. Fading out first would mean
+    // awaiting before the swap, and two quick moves would then leave rival
+    // fades running with the music trailing the room the player is in.
+    music.src = track;
+    music.volume = 0;
+    if (muted) return;
+    try {
+        await music.play();
+    } catch {
+        resumeOnGesture();
+        return;
+    }
+    await fadeMusic(MUSIC_VOLUME, 600);
+}
+
+function stopMusic() {
+    currentTrack = null;
+    music.pause();
+    music.removeAttribute('src');
+    music.volume = 0;
+}
+
+function setMuted(next) {
+    muted = next;
+    $('btn-mute').textContent = muted ? 'muted' : 'music';
+    $('btn-mute').classList.toggle('off', muted);
+    if (muted) {
+        fadeMusic(0, 200).then(() => music.pause());
+    } else if (currentTrack) {
+        music.play().then(() => fadeMusic(MUSIC_VOLUME, 400)).catch(resumeOnGesture);
+    }
+}
+
+// --- backdrop ---------------------------------------------------------------
+
 let showingA = false;
 
 function setBackdrop(roomID) {
@@ -130,6 +227,7 @@ function renderRoom() {
     $('room-desc').textContent = room.description || '';
     $('count-room').textContent = state.players.length;
     setBackdrop(room.id);
+    playRoomMusic(room.id);
 
     listInto($('room-npcs'), state.npcs.map((id) => ({
         label: pretty(id),
@@ -409,6 +507,7 @@ EventsOn('tap:disconnected', () => {
 // --- session --------------------------------------------------------------
 
 function showConnect() {
+    stopMusic();
     $('hud').hidden = true;
     $('connect').hidden = false;
     $('connect-error').textContent = '';
@@ -447,6 +546,8 @@ $('connect-form').onsubmit = (e) => {
     }
     enterWorld(addr, name);
 };
+
+$('btn-mute').onclick = () => setMuted(!muted);
 
 $('btn-quit').onclick = async () => {
     await guard(Disconnect);
