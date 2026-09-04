@@ -3,6 +3,7 @@ module gui
 go 1.27.0
 
 require (
+	github.com/Enelsep/42_TAP/core v0.0.0-20260903123859-d5a5657bade9
 	github.com/wailsapp/wails/v2 v2.15.0
 )
 
