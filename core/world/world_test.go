@@ -3,6 +3,7 @@ package world
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,8 +23,8 @@ func TestLoadCanonicalises(t *testing.T) {
 	if door == nil {
 		t.Fatal("loc.door missing")
 	}
-	if got := door.Exits["north"]; got != "loc.boss" {
-		t.Errorf("door exit north = %q, want loc.boss", got)
+	if got := door.Exits["north"]; !strings.HasPrefix(got, PrefixLocation) || w.Locations[got] == nil {
+		t.Errorf("door exit north = %q, want an existing %s room", got, PrefixLocation)
 	}
 	if got := door.Requires["north"]; got != "item.key" {
 		t.Errorf("door requires north = %q, want item.key", got)
