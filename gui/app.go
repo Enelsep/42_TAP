@@ -324,9 +324,3 @@ func (a *App) Quest(npc string) (protocol.QuestReply, error) {
 func (a *App) Quests() (protocol.QuestsReply, error) {
 	return decode[protocol.QuestsReply](a, protocol.Command{Verb: protocol.VerbQuests})
 }
-
-// Greet is the Wails template's demo binding, still called by the placeholder
-// frontend. It goes away with T6.2.
-func (a *App) Greet(name string) string {
-	return fmt.Sprintf("Hello %s, It's show time!", name)
-}
