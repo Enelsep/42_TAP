@@ -17,6 +17,13 @@ import square from './assets/images/square.png';
 import start from './assets/images/start.png';
 import suburbs from './assets/images/suburbs.png';
 
+import iconKey from './assets/images/items/alien_key.png';
+import iconBone from './assets/images/items/bone.png';
+import iconCrysknife from './assets/images/items/crysknife.png';
+import iconLiquor from './assets/images/items/liquor.png';
+import iconSpice from './assets/images/items/spice.png';
+import iconWater from './assets/images/items/water.png';
+
 import ambienceTrack from './assets/music/ambience.mp3';
 import barTrack from './assets/music/bar.mp3';
 import combatTrack from './assets/music/combat.mp3';
@@ -39,6 +46,13 @@ const TRACKS = {
 };
 
 const MUSIC_VOLUME = 1;
+
+// Item id -> icon. An item with no icon still renders, by name, so another
+// group's world cannot leave the panels blank.
+const ITEM_ICONS = {
+    'item.key': iconKey, 'item.bone': iconBone, 'item.crysknife': iconCrysknife,
+    'item.liquor': iconLiquor, 'item.spice': iconSpice, 'item.water': iconWater,
+};
 
 const DIRECTIONS = ['north', 'south', 'east', 'west'];
 const SCOPES = ['ROOM', 'GLOBAL', 'GROUP'];
@@ -205,7 +219,15 @@ function listInto(node, entries, emptyText) {
     }
     for (const entry of entries) {
         const li = document.createElement('li');
+        if (entry.icon) {
+            const img = document.createElement('img');
+            img.className = 'row-icon';
+            img.src = entry.icon;
+            img.alt = '';
+            li.append(img);
+        }
         const label = document.createElement('span');
+        label.className = 'row-label';
         label.textContent = entry.label;
         li.append(label);
         if (entry.action) {
@@ -236,6 +258,7 @@ function renderRoom() {
 
     listInto($('room-items'), state.items.map((id) => ({
         label: pretty(id),
+        icon: ITEM_ICONS[id],
         action: 'take',
         onClick: () => takeItem(id),
     })), 'nothing on the ground');
@@ -254,12 +277,43 @@ function renderRoom() {
     }
 }
 
+// The inventory shows icons only — the name arrives as a tooltip on hover, and
+// the icon is itself the drop button, replacing the old per-row DROP.
 function renderInventory() {
-    listInto($('inventory'), state.inventory.map((id) => ({
-        label: pretty(id),
-        action: 'drop',
-        onClick: () => dropItem(id),
-    })), 'empty-handed');
+    const node = $('inventory');
+    node.replaceChildren();
+
+    if (!state.inventory.length) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'empty-handed';
+        node.append(li);
+        return;
+    }
+
+    for (const id of state.inventory) {
+        const name = pretty(id);
+        const slot = document.createElement('button');
+        slot.className = 'slot';
+        slot.dataset.name = name;
+        slot.setAttribute('aria-label', `Drop ${name}`);
+        slot.onclick = () => dropItem(id);
+
+        const icon = ITEM_ICONS[id];
+        if (icon) {
+            const img = document.createElement('img');
+            img.src = icon;
+            img.alt = name;
+            slot.append(img);
+        } else {
+            slot.classList.add('no-icon');
+            slot.append(document.createTextNode(name));
+        }
+
+        const li = document.createElement('li');
+        li.append(slot);
+        node.append(li);
+    }
 }
 
 function renderChat() {
