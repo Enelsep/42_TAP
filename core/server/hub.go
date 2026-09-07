@@ -4,22 +4,26 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+
+	"github.com/Enelsep/42_TAP/core/world"
 )
 
 // Client is one connected player: the socket, and a buffered outbound queue
 // drained by its own writer goroutine, so a slow or dead client can never
 // block a broadcast to everyone else.
 type Client struct {
-	conn  net.Conn
-	out   chan string
-	name  string // empty until CONNECT succeeds
-	room  string // canonical room id; only meaningful once name != ""
-	group string // group id; empty means "not in a group"
+	conn      net.Conn
+	out       chan string
+	name      string          // empty until CONNECT succeeds
+	room      string          // canonical room id; only meaningful once name != ""
+	group     string          // group id; empty means "not in a group"
+	inventory map[string]bool // canonical item ids currently held
 }
 
 func newClient(conn net.Conn) *Client {
-	return &Client{conn: conn, out: make(chan string, 64)}
+	return &Client{conn: conn, out: make(chan string, 64), inventory: map[string]bool{}}
 }
 
 // send enqueues line without blocking. If the client's buffer is full, the
@@ -42,19 +46,32 @@ func (c *Client) writeLoop() {
 	}
 }
 
-// Hub is the mutex-guarded registry of connected, named clients, and of the
-// groups they've formed.
+// Hub is the mutex-guarded registry of connected, named clients, the groups
+// they've formed, and the dynamic (post-startup) item placement — the whole
+// of the game's mutable state behind one lock, per the roadmap's concurrency
+// model.
 type Hub struct {
-	mu      sync.Mutex
-	clients map[string]*Client
-	groups  map[string]map[string]*Client // group id -> members, by name
+	mu        sync.Mutex
+	clients   map[string]*Client
+	groups    map[string]map[string]*Client // group id -> members, by name
+	roomItems map[string][]string           // room id -> item ids on the floor
+	world     *world.World                  // read-only: item names for display-name resolution
 }
 
-func NewHub() *Hub {
-	return &Hub{
-		clients: make(map[string]*Client),
-		groups:  make(map[string]map[string]*Client),
+// NewHub seeds the dynamic floor-item state from w's static placement.
+func NewHub(w *world.World) *Hub {
+	h := &Hub{
+		clients:   make(map[string]*Client),
+		groups:    make(map[string]map[string]*Client),
+		roomItems: make(map[string][]string),
+		world:     w,
 	}
+	for id, loc := range w.Locations {
+		if len(loc.Items) > 0 {
+			h.roomItems[id] = slices.Clone(loc.Items)
+		}
+	}
+	return h
 }
 
 // Register adds c under c.name. It refuses and returns false if that name
@@ -215,4 +232,86 @@ func (h *Hub) BroadcastGroup(group, line string, except *Client) {
 			c.send(line)
 		}
 	}
+}
+
+// RoomItems returns the canonical ids of every item currently on room's
+// floor, sorted.
+func (h *Hub) RoomItems(room string) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := slices.Clone(h.roomItems[room])
+	slices.Sort(items)
+	return items
+}
+
+// Inventory returns the canonical ids c is carrying, sorted.
+func (h *Hub) Inventory(c *Client) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	items := make([]string, 0, len(c.inventory))
+	for id := range c.inventory {
+		items = append(items, id)
+	}
+	slices.Sort(items)
+	return items
+}
+
+// findItem returns the index in items whose canonical id equals arg exactly,
+// or — failing that — whose display name matches arg case-insensitively
+// (RFC §8.3/8.4). -1 if neither matches.
+func findItem(items []string, arg string, w *world.World) int {
+	for i, id := range items {
+		if id == arg {
+			return i
+		}
+	}
+	for i, id := range items {
+		if item := w.Items[id]; item != nil && strings.EqualFold(item.Name, arg) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TakeItem resolves arg against room's floor items (id or display name) and
+// moves it into c's inventory. The whole resolve-then-move happens under one
+// lock acquisition, so two players racing the same TAKE can never both
+// succeed — items are unique instances (RFC §8) by construction, not by luck.
+func (h *Hub) TakeItem(c *Client, room, arg string) (id string, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	items := h.roomItems[room]
+	i := findItem(items, arg, h.world)
+	if i == -1 {
+		return "", false
+	}
+	id = items[i]
+	h.roomItems[room] = append(items[:i], items[i+1:]...)
+	c.inventory[id] = true
+	return id, true
+}
+
+// DropItem resolves arg against c's inventory (id or display name) and moves
+// it onto room's floor.
+func (h *Hub) DropItem(c *Client, room, arg string) (id string, ok bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	id = arg
+	if !c.inventory[id] {
+		id = ""
+		for held := range c.inventory {
+			if item := h.world.Items[held]; item != nil && strings.EqualFold(item.Name, arg) {
+				id = held
+				break
+			}
+		}
+		if id == "" {
+			return "", false
+		}
+	}
+	delete(c.inventory, id)
+	h.roomItems[room] = append(h.roomItems[room], id)
+	return id, true
 }
