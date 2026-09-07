@@ -296,7 +296,7 @@ input:focus {
     position: relative;
     height: 16px;
     margin-top: 8px;
-    border: 1px solid var(--line);
+    border: 1px solid #d9a441;
     border-radius: 8px;
     overflow: hidden;
     background: rgba(5, 7, 12, .5);
@@ -305,7 +305,7 @@ input:focus {
 .hp-fill {
     height: 100%;
     width: 100%;
-    background: rgba(218, 10, 10, 0.85);
+    background: linear-gradient(-90deg, rgba(179, 0, 0, 1) 0%, rgba(166, 0, 0, 1) 35%, rgba(145, 0, 7, 1) 100%);
     transition: width .35s ease;
 }
 
@@ -486,11 +486,11 @@ input:focus {
     overflow: hidden;
 }
 
-#chat.collapsed .chat-log > div {
+#chat.collapsed .chat-log>div {
     display: none;
 }
 
-#chat.collapsed .chat-log > div:nth-last-child(-n+2) {
+#chat.collapsed .chat-log>div:nth-last-child(-n+2) {
     display: block;
 }
 
