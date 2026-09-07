@@ -10,7 +10,7 @@
     --sand-dim: rgba(255, 255, 255, 0.815);
     --amber: #d9a441;
     --danger: #d9614a;
-    --panel: rgba(10, 12, 18, .42);
+    --panel: rgba(10, 12, 18, 0.103);
     --panel-solid: rgba(10, 12, 18, .82);
     --line: rgba(236, 224, 200, .16);
     --line-strong: rgba(236, 224, 200, .34);
@@ -74,15 +74,14 @@ h1 {
 }
 
 h2 {
-    font: 500 11px/1 'Space Grotesk', sans-serif;
-    letter-spacing: .22em;
+    font: 500 16px/1 'Space Grotesk', sans-serif;
     text-transform: uppercase;
     color: var(--amber);
     margin: 0 0 8px;
 }
 
 h3 {
-    font: 500 10px/1 'Space Grotesk', sans-serif;
+    font: 500 12px/1 'Space Grotesk', sans-serif;
     letter-spacing: .18em;
     text-transform: uppercase;
     color: var(--sand-dim);
