@@ -25,23 +25,20 @@ import shopTrack from './assets/music/shop.mp3';
 import squareTrack from './assets/music/square.mp3';
 import startTrack from './assets/music/start.mp3';
 
-// Room id -> backdrop. Keyed by the canonical ids the server puts on the wire,
-// so a room the world adds later simply shows no art instead of breaking.
 const BACKDROPS = {
     'loc.bar': bar, 'loc.bossroom': boss, 'loc.camp': camp, 'loc.city': city,
     'loc.door': door, 'loc.nest': nest, 'loc.shop': shop, 'loc.square': square,
     'loc.start': start, 'loc.suburbs': suburbs,
 };
 
-// Combat music follows the two enemies. Every other room plays its own track
-// where one exists, and the shared ambience where it does not.
+
 const TRACKS = {
     'loc.nest': combatTrack, 'loc.bossroom': combatTrack,
     'loc.bar': barTrack, 'loc.door': doorTrack, 'loc.shop': shopTrack,
     'loc.square': squareTrack, 'loc.start': startTrack,
 };
 
-const MUSIC_VOLUME = 0.35;
+const MUSIC_VOLUME = 1;
 
 const DIRECTIONS = ['north', 'south', 'east', 'west'];
 const SCOPES = ['ROOM', 'GLOBAL', 'GROUP'];
@@ -101,79 +98,101 @@ async function guard(fn) {
 // --- rendering ------------------------------------------------------------
 
 // --- room music ------------------------------------------------------------
+//
+// WebKitGTK (the Wails webview) only lets a page start audible audio from a
+// user gesture. Measured against this webview: play() at an audible volume
+// outside a gesture is refused outright, and an element started silently is
+// paused again the moment its volume rises. So every play() below runs
+// synchronously inside a click or keypress, already at its final volume —
+// never faded up from zero, which is what silenced it before.
 
 const music = new Audio();
 music.loop = true;
-music.volume = 0;
+music.preload = 'auto';
 
 let currentTrack = null;
+let currentSrc = null;
 let muted = false;
-let awaitingGesture = false;
+const reported = new Set();
 
-function fadeMusic(target, ms) {
-    return new Promise((resolve) => {
-        const from = music.volume;
-        const started = performance.now();
-        const step = (now) => {
-            const k = Math.min(1, (now - started) / ms);
-            music.volume = Math.max(0, Math.min(1, from + (target - from) * k));
-            if (k < 1) requestAnimationFrame(step); else resolve();
-        };
-        requestAnimationFrame(step);
-    });
+// The webview's media pipeline cannot stream from Wails' own wails:// scheme —
+// it answers "media error 4 / NotSupportedError" for every track. Fetching each
+// file once and handing the element a blob: URL takes the scheme out of the
+// media path entirely, which this webview plays happily.
+const blobs = new Map();
+
+async function cacheTracks() {
+    const urls = new Set([...Object.values(TRACKS), ambienceTrack]);
+    await Promise.all([...urls].map(async (url) => {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            blobs.set(url, URL.createObjectURL(await response.blob()));
+        } catch (e) {
+            note(`cannot fetch ${url} (${e.message})`);
+        }
+    }));
 }
 
-// A webview may refuse to start audio without a gesture. Entering the world is
-// itself a click, so this rarely fires — but if it does, wait for the next one
-// rather than leaving the world silent for good.
-function resumeOnGesture() {
-    if (awaitingGesture) return;
-    awaitingGesture = true;
-    const resume = () => {
-        awaitingGesture = false;
-        document.removeEventListener('pointerdown', resume);
-        document.removeEventListener('keydown', resume);
-        if (!muted) music.play().then(() => fadeMusic(MUSIC_VOLUME, 600)).catch(() => { });
-    };
-    document.addEventListener('pointerdown', resume);
-    document.addEventListener('keydown', resume);
+// One line per distinct problem: enough to diagnose, not a flood.
+function note(text) {
+    if (reported.has(text)) return;
+    reported.add(text);
+    logLine(`music: ${text}`, true);
 }
 
-async function playRoomMusic(roomID) {
-    const track = TRACKS[roomID] || ambienceTrack;
-    if (track === currentTrack) return; // same track: let it keep looping
-    currentTrack = track;
+music.addEventListener('error', () => {
+    note(`cannot load ${music.currentSrc || music.src} (media error ${music.error ? music.error.code : '?'})`);
+});
 
-    // Swap synchronously and fade only the way in. Fading out first would mean
-    // awaiting before the swap, and two quick moves would then leave rival
-    // fades running with the music trailing the room the player is in.
-    music.src = track;
-    music.volume = 0;
-    if (muted) return;
-    try {
-        await music.play();
-    } catch {
-        resumeOnGesture();
-        return;
+// The webview enforces its autoplay rule by pausing us. Say so rather than
+// leaving the world mysteriously silent.
+music.addEventListener('pause', () => {
+    if (!muted && currentTrack && music.currentTime > 0) {
+        note('the webview paused playback — click anywhere to resume');
     }
-    await fadeMusic(MUSIC_VOLUME, 600);
+});
+
+function playTrack(track) {
+    // Prefer the cached blob; fall back to the raw URL until it is ready, and
+    // pick the blob up on the next attempt once it is.
+    const src = blobs.get(track) || track;
+    if (src !== currentSrc) {
+        currentTrack = track;
+        currentSrc = src;
+        music.src = src;
+    }
+    if (muted) return;
+    music.volume = MUSIC_VOLUME; // final volume up front: ramping it gets us paused
+    music.play().catch((e) => note(`${e.name}: ${e.message}`));
+}
+
+// Call straight from a gesture handler, with no await in between.
+function playRoomMusic(roomID) {
+    playTrack(TRACKS[roomID] || ambienceTrack);
+}
+
+// Any click or keypress is a fresh gesture, so it can recover playback the
+// webview refused earlier: a redirected move, a reconnect, a stray pause.
+function resumeMusic() {
+    if (!muted && currentTrack && music.paused) playTrack(currentTrack);
 }
 
 function stopMusic() {
-    currentTrack = null;
+    currentTrack = null; // before pause(), so the pause listener stays quiet
+    currentSrc = null;
     music.pause();
     music.removeAttribute('src');
-    music.volume = 0;
 }
 
 function setMuted(next) {
-    muted = next;
+    muted = next; // before pause(), same reason
     $('btn-mute').textContent = muted ? 'muted' : 'music';
     $('btn-mute').classList.toggle('off', muted);
     if (muted) {
-        fadeMusic(0, 200).then(() => music.pause());
+        music.pause();
     } else if (currentTrack) {
-        music.play().then(() => fadeMusic(MUSIC_VOLUME, 400)).catch(resumeOnGesture);
+        playTrack(currentTrack); // runs inside the button's own click
     }
 }
 
@@ -354,6 +373,11 @@ const asChoices = (ids) => ids.map((id) => ({ label: pretty(id), value: id }));
 // --- actions --------------------------------------------------------------
 
 async function move(dir) {
+    // Start the destination's track now, while still inside the click that
+    // asked for the move: awaiting the server first spends the gesture.
+    const target = state.room?.exits?.[dir];
+    if (target) playRoomMusic(target);
+
     const moved = await guard(() => Move(dir));
     if (!moved.ok) return;
     logLine(`moved ${dir}`);
@@ -544,10 +568,14 @@ $('connect-form').onsubmit = (e) => {
         $('connect-error').textContent = 'server and name are both required';
         return;
     }
+    playRoomMusic('loc.start'); // inside this click; a later LOOK corrects it
     enterWorld(addr, name);
 };
 
 $('btn-mute').onclick = () => setMuted(!muted);
+
+document.addEventListener('click', resumeMusic);
+document.addEventListener('keydown', resumeMusic);
 
 $('btn-quit').onclick = async () => {
     await guard(Disconnect);
@@ -591,5 +619,7 @@ document.addEventListener('keydown', (e) => {
 for (const url of Object.values(BACKDROPS)) {
     new Image().src = url;
 }
+
+cacheTracks();
 
 renderChat();

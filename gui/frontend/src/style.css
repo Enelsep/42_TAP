@@ -7,7 +7,7 @@
 
 :root {
     --sand: #ece0c8;
-    --sand-dim: rgba(236, 224, 200, .62);
+    --sand-dim: rgba(255, 255, 255, 0.815);
     --amber: #d9a441;
     --danger: #d9614a;
     --panel: rgba(10, 12, 18, .42);
@@ -306,7 +306,7 @@ input:focus {
 .hp-fill {
     height: 100%;
     width: 100%;
-    background: linear-gradient(90deg, rgba(217, 164, 65, .85), rgba(217, 97, 74, .85));
+    background: rgba(218, 10, 10, 0.85);
     transition: width .35s ease;
 }
 
