@@ -345,9 +345,26 @@ input:focus {
     overflow-y: auto;
 }
 
+/* Weighted so the room and inventory get the space they need and the log
+   takes what is left, rather than the log growing to fill the column. */
+#left .room-panel {
+    flex: 0 1 auto;
+    min-height: 220px;
+}
+
+#left .inv-panel {
+    flex: 0 1 auto;
+    min-height: 160px;
+}
+
+/* The panel itself never scrolls: the heading stays put and only the log body
+   scrolls, so there is one scrollbar here instead of two nested ones. */
 #left .log-panel {
-    flex: 1 1 auto;
-    min-height: 90px;
+    flex: 1 1 0;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .desc {
@@ -396,8 +413,9 @@ input:focus {
     font-size: 12px;
     line-height: 1.45;
     color: var(--sand-dim);
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    max-height: 100%;
 }
 
 .log div {
@@ -458,14 +476,86 @@ input:focus {
     padding: 9px 12px;
 }
 
+/* Collapsed until the message box is focused: the world keeps the space. */
+#chat.collapsed {
+    align-self: end;
+}
+
+#chat.collapsed .chat-log {
+    flex: 0 0 auto;
+    overflow: hidden;
+}
+
+#chat.collapsed .chat-log > div {
+    display: none;
+}
+
+#chat.collapsed .chat-log > div:nth-last-child(-n+2) {
+    display: block;
+}
+
 /* --- bottom band: compass cross above the action row --- */
 
+/* Above the action row, so the south tooltip is not painted underneath it:
+   each button's backdrop-filter traps its own z-index. */
 .compass {
+    position: relative;
+    z-index: 2;
     display: grid;
     grid-template-areas: ". n ." "w c e" ". s .";
     grid-auto-columns: 82px;
     gap: 6px;
     justify-items: stretch;
+}
+
+.compass button {
+    position: relative;
+}
+
+.compass button[data-dest]::after {
+    content: attr(data-dest);
+    position: absolute;
+    z-index: 5;
+    white-space: nowrap;
+    padding: 5px 10px;
+    border-radius: 8px;
+    background: var(--panel-solid);
+    border: 1px solid var(--line-strong);
+    color: var(--sand);
+    font-size: 11px;
+    letter-spacing: .04em;
+    text-transform: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .12s;
+}
+
+.compass button[data-dest]:hover::after {
+    opacity: 1;
+}
+
+.compass button[data-dir="north"][data-dest]::after {
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.compass button[data-dir="south"][data-dest]::after {
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.compass button[data-dir="west"][data-dest]::after {
+    right: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.compass button[data-dir="east"][data-dest]::after {
+    left: calc(100% + 8px);
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 .compass .rose {

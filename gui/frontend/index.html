@@ -51,7 +51,7 @@
             </header>
 
             <aside id="left">
-                <section class="panel">
+                <section class="panel room-panel">
                     <h2>Room : <span class="room" id="hud-room">—</span> </h2>
                     <p class="desc" id="room-desc"></p>
                     <h3>Characters</h3>
@@ -59,7 +59,7 @@
                     <h3>On the ground</h3>
                     <ul class="list" id="room-items"></ul>
                 </section>
-                <section class="panel">
+                <section class="panel inv-panel">
                     <h2>Inventory</h2>
                     <ul class="list" id="inventory"></ul>
                 </section>
@@ -70,7 +70,7 @@
             </aside>
 
             <!-- chat: right side, between the QUIT button and the bottom band -->
-            <aside class="panel" id="chat">
+            <aside class="panel collapsed" id="chat">
                 <div class="tabs" id="chat-tabs">
                     <button class="active" data-scope="ROOM">Room</button>
                     <button data-scope="GLOBAL">Global</button>

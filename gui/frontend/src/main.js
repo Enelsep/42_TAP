@@ -50,6 +50,7 @@ const state = {
     items: [],
     npcs: [],
     inventory: [],
+    roomNames: {}, // room id -> display name, learned by visiting
     chat: { ROOM: [], GLOBAL: [], GROUP: [] },
     scope: 'ROOM',
     backdrop: null,
@@ -83,8 +84,6 @@ function toast(text, isError = false) {
     setTimeout(() => el.remove(), 4000);
 }
 
-// guard runs a backend call and turns a rejected promise — an ERR reply, or a
-// dropped connection — into a toast plus a log line, never an unhandled error.
 async function guard(fn) {
     try {
         return { ok: true, value: await fn() };
@@ -123,7 +122,6 @@ async function cacheTracks() {
     }));
 }
 
-// One line per distinct problem: enough to diagnose, not a flood.
 function note(text) {
     if (reported.has(text)) return;
     reported.add(text);
@@ -148,36 +146,33 @@ function playTrack(track) {
         music.src = src;
     }
     if (muted) return;
-    music.volume = MUSIC_VOLUME; // final volume up front: ramping it gets us paused
+    music.volume = MUSIC_VOLUME;
     music.play().catch((e) => note(`${e.name}: ${e.message}`));
 }
 
-// Call straight from a gesture handler, with no await in between.
 function playRoomMusic(roomID) {
     playTrack(TRACKS[roomID] || ambienceTrack);
 }
 
-// Any click or keypress is a fresh gesture, so it can recover playback the
-// webview refused earlier: a redirected move, a reconnect, a stray pause.
 function resumeMusic() {
     if (!muted && currentTrack && music.paused) playTrack(currentTrack);
 }
 
 function stopMusic() {
-    currentTrack = null; // before pause(), so the pause listener stays quiet
+    currentTrack = null;
     currentSrc = null;
     music.pause();
     music.removeAttribute('src');
 }
 
 function setMuted(next) {
-    muted = next; // before pause(), same reason
+    muted = next;
     $('btn-mute').textContent = muted ? 'muted' : 'music';
     $('btn-mute').classList.toggle('off', muted);
     if (muted) {
         music.pause();
     } else if (currentTrack) {
-        playTrack(currentTrack); // runs inside the button's own click
+        playTrack(currentTrack);
     }
 }
 
@@ -247,7 +242,15 @@ function renderRoom() {
 
     const exits = room.exits || {};
     for (const button of $('compass').querySelectorAll('button')) {
-        button.disabled = !exits[button.dataset.dir];
+        const target = exits[button.dataset.dir];
+        button.disabled = !target;
+        // Only the current room's name comes over the wire, so fall back to the
+        // id until the player has actually been there.
+        if (target) {
+            button.dataset.dest = `to ${state.roomNames[target] || pretty(target)}`;
+        } else {
+            delete button.dataset.dest;
+        }
     }
 }
 
@@ -295,6 +298,7 @@ async function refreshRoom() {
     const look = await guard(Look);
     if (!look.ok) return;
     state.room = look.value.room;
+    state.roomNames[look.value.room.id] = look.value.room.name;
     state.players = look.value.players || [];
     state.items = look.value.items || [];
     state.npcs = look.value.npcs || [];
@@ -358,8 +362,6 @@ const asChoices = (ids) => ids.map((id) => ({ label: pretty(id), value: id }));
 // --- actions --------------------------------------------------------------
 
 async function move(dir) {
-    // Start the destination's track now, while still inside the click that
-    // asked for the move: awaiting the server first spends the gesture.
     const target = state.room?.exits?.[dir];
     if (target) playRoomMusic(target);
 
@@ -584,6 +586,9 @@ for (const tab of $('chat-tabs').querySelectorAll('button')) {
         renderChat();
     };
 }
+
+$('chat-input').addEventListener('focus', () => $('chat').classList.remove('collapsed'));
+$('chat-input').addEventListener('blur', () => $('chat').classList.add('collapsed'));
 
 $('chat-form').onsubmit = async (e) => {
     e.preventDefault();
