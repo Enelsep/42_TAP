@@ -98,13 +98,6 @@ async function guard(fn) {
 // --- rendering ------------------------------------------------------------
 
 // --- room music ------------------------------------------------------------
-//
-// WebKitGTK (the Wails webview) only lets a page start audible audio from a
-// user gesture. Measured against this webview: play() at an audible volume
-// outside a gesture is refused outright, and an element started silently is
-// paused again the moment its volume rises. So every play() below runs
-// synchronously inside a click or keypress, already at its final volume —
-// never faded up from zero, which is what silenced it before.
 
 const music = new Audio();
 music.loop = true;
@@ -115,10 +108,6 @@ let currentSrc = null;
 let muted = false;
 const reported = new Set();
 
-// The webview's media pipeline cannot stream from Wails' own wails:// scheme —
-// it answers "media error 4 / NotSupportedError" for every track. Fetching each
-// file once and handing the element a blob: URL takes the scheme out of the
-// media path entirely, which this webview plays happily.
 const blobs = new Map();
 
 async function cacheTracks() {
@@ -145,8 +134,6 @@ music.addEventListener('error', () => {
     note(`cannot load ${music.currentSrc || music.src} (media error ${music.error ? music.error.code : '?'})`);
 });
 
-// The webview enforces its autoplay rule by pausing us. Say so rather than
-// leaving the world mysteriously silent.
 music.addEventListener('pause', () => {
     if (!muted && currentTrack && music.currentTime > 0) {
         note('the webview paused playback — click anywhere to resume');
@@ -154,8 +141,6 @@ music.addEventListener('pause', () => {
 });
 
 function playTrack(track) {
-    // Prefer the cached blob; fall back to the raw URL until it is ready, and
-    // pick the blob up on the next attempt once it is.
     const src = blobs.get(track) || track;
     if (src !== currentSrc) {
         currentTrack = track;
