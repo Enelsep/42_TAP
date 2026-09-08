@@ -32,6 +32,12 @@ const (
 	VerbStatus    Verb = "STATUS"    // STATUS                      → OK <StatusReply JSON>
 	VerbQuest     Verb = "QUEST"     // QUEST <npc>                 → OK <QuestReply JSON>
 	VerbQuests    Verb = "QUESTS"    // QUESTS                      → OK <QuestsReply JSON>
+
+	// Non-RFC (§2.6, D16): our own combat extras. Never required for
+	// interop — our clients need not send them against another group's
+	// server, and another group's client will simply never send them to us.
+	VerbDefend Verb = "DEFEND" // DEFEND                      → OK
+	VerbFlee   Verb = "FLEE"   // FLEE                         → OK room=<room.id>
 )
 
 type ChatScope string
@@ -228,7 +234,7 @@ func ParseCommand(line string) (Command, error) {
 	c := Command{Verb: Verb(strings.ToUpper(verb)), Arg: rest}
 
 	switch c.Verb {
-	case VerbLook, VerbQuit, VerbWho, VerbInventory, VerbStatus, VerbQuests:
+	case VerbLook, VerbQuit, VerbWho, VerbInventory, VerbStatus, VerbQuests, VerbDefend, VerbFlee:
 		c.Arg = "" // takes no argument; trailing tokens are ignored
 
 	case VerbConnect:

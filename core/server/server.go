@@ -141,6 +141,18 @@ func (s *Server) handleConn(conn net.Conn) {
 		case protocol.VerbQuests:
 			s.handleQuests(c)
 
+		case protocol.VerbAttack:
+			s.handleAttack(c, cmd)
+
+		case protocol.VerbStatus:
+			s.handleStatus(c)
+
+		case protocol.VerbDefend:
+			s.handleDefend(c)
+
+		case protocol.VerbFlee:
+			s.handleFlee(c)
+
 		default:
 			log.Printf("tap server: %s -> %+v", remote, cmd)
 			c.send(protocol.FormatOK(""))
@@ -178,7 +190,8 @@ func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 
 // handleLook replies with the current room, who else is there, and what's
 // on the floor — the floor comes from the hub's dynamic state, which is what
-// TAKE/DROP actually mutate; NPC placement is still the world's static data.
+// TAKE/DROP actually mutate. The NPC list goes through RoomNPC rather than
+// the world's static Spawns, so a killed enemy stops showing up (D15).
 func (s *Server) handleLook(c *Client) {
 	loc := s.world.Locations[c.room]
 
@@ -193,8 +206,8 @@ func (s *Server) handleLook(c *Client) {
 		Items:   nonNil(s.hub.RoomItems(c.room)),
 		NPCs:    []string{},
 	}
-	if loc.Spawns != nil {
-		reply.NPCs = []string{loc.Spawns.NPCType}
+	if npc := s.hub.RoomNPC(c.room); npc != nil {
+		reply.NPCs = []string{npc.ID}
 	}
 
 	data, err := json.Marshal(reply)
@@ -217,9 +230,7 @@ func (s *Server) handleMove(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrNoExit))
 		return
 	}
-	if _, gated := loc.Requires[dir]; gated {
-		// TODO(T3.5): let this through once inventory exists and c carries
-		// the required item. Until then the exit stays closed to everyone.
+	if item, gated := loc.Requires[dir]; gated && !s.hub.Holds(c, item) {
 		c.send(protocol.FormatErr(protocol.ErrNoExit))
 		return
 	}
@@ -366,7 +377,7 @@ func (s *Server) handleInventory(c *Client) {
 // just closed a deliver quest, the quest's own Complete line instead (D10:
 // completion is a side effect of the RFC commands, never a separate reply).
 func (s *Server) handleTalk(c *Client, cmd protocol.Command) {
-	npc := resolveNPC(s.world, c.room, cmd.Arg)
+	npc := s.hub.NPCIn(c.room, cmd.Arg)
 	if npc == nil {
 		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
 		return
@@ -382,7 +393,7 @@ func (s *Server) handleTalk(c *Client, cmd protocol.Command) {
 // handleQuest replies with the quest npc offers, accepting it on the spot if
 // this is the first time c has asked (D10 — QUEST is both offer and accept).
 func (s *Server) handleQuest(c *Client, cmd protocol.Command) {
-	npc := resolveNPC(s.world, c.room, cmd.Arg)
+	npc := s.hub.NPCIn(c.room, cmd.Arg)
 	if npc == nil {
 		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
 		return
@@ -413,6 +424,89 @@ func (s *Server) handleQuests(c *Client) {
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
+}
+
+// handleAttack resolves one ATTACK turn (D15): c's hit, then npc's counter if
+// it survives, both inside Hub.AttackNPC's single lock acquisition so two
+// players finishing the same NPC off can never both trigger its death.
+func (s *Server) handleAttack(c *Client, cmd protocol.Command) {
+	npc := s.hub.NPCIn(c.room, cmd.Arg)
+	if npc == nil {
+		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
+		return
+	}
+	if npc.Role != world.RoleEnemy {
+		c.send(protocol.FormatErr(protocol.ErrNPCNotHostile))
+		return
+	}
+
+	oldRoom := c.room
+	reply, npcDied, respawned, ok := s.hub.AttackNPC(c, npc)
+	if !ok {
+		// Died to someone else between resolution and this call — to c the
+		// effect is the same as it never having been here.
+		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
+		return
+	}
+
+	data, err := json.Marshal(reply)
+	if err != nil {
+		log.Printf("tap server: marshal AttackReply for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+
+	if npcDied {
+		log.Printf("tap server: %s killed %s", c.name, npc.ID)
+	}
+	if respawned {
+		log.Printf("tap server: %s died to %s and respawned in %s", c.name, npc.ID, s.world.Start)
+		s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceLeave, Player: c.name,
+		}), nil)
+		s.hub.BroadcastRoom(s.world.Start, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceEnter, Player: c.name,
+		}), c)
+	}
+}
+
+// handleStatus replies with c's current HP and derived status (D15).
+func (s *Server) handleStatus(c *Client) {
+	data, err := json.Marshal(s.hub.StatusOf(c))
+	if err != nil {
+		log.Printf("tap server: marshal StatusReply for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+}
+
+// handleDefend arms DEFEND (D16): a bare OK, since the whole effect is
+// internal and only shows up as a smaller number the next time c is hit.
+func (s *Server) handleDefend(c *Client) {
+	s.hub.Defend(c)
+	c.send(protocol.FormatOK(""))
+}
+
+// handleFlee forces a random valid move, taking one free counter-attack from
+// any live enemy in the room on the way out (D16). The reply mirrors MOVE's
+// shape, since that is exactly what FLEE is, plus an unavoidable hit.
+func (s *Server) handleFlee(c *Client) {
+	oldRoom := c.room
+	target, respawned, ok := s.hub.Flee(c)
+	if !ok {
+		c.send(protocol.FormatErr(protocol.ErrNoExit))
+		return
+	}
+	c.send(protocol.FormatOK("room=" + target))
+	s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
+		Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceLeave, Player: c.name,
+	}), nil)
+	s.hub.BroadcastRoom(target, protocol.FormatEvent(protocol.Event{
+		Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceEnter, Player: c.name,
+	}), c)
+	if respawned {
+		log.Printf("tap server: %s died fleeing and respawned in %s", c.name, target)
+	}
 }
 
 // nonNil turns a nil slice into an empty one so it marshals as "[]", never

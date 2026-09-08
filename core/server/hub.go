@@ -25,6 +25,9 @@ type Client struct {
 	// / protocol.QuestCompleted): a quest a player has never accepted is simply
 	// absent, which is what D10 calls the implicit "available" state.
 	quests map[string]string
+
+	hp        int  // current HP; see PlayerMaxHP/RespawnHP in combat.go (D15)
+	defending bool // DEFEND armed: halves the damage of the next hit taken
 }
 
 func newClient(conn net.Conn) *Client {
@@ -33,6 +36,7 @@ func newClient(conn net.Conn) *Client {
 		out:       make(chan string, 64),
 		inventory: map[string]bool{},
 		quests:    map[string]string{},
+		hp:        PlayerMaxHP,
 	}
 }
 
@@ -67,6 +71,7 @@ type Hub struct {
 	roomItems    map[string][]string           // room id -> item ids on the floor
 	npcTalk      map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
 	grantedItems map[string]bool               // quest grant/reward item ids already created once, see grantOnceLocked
+	npcHP        map[string]int                // npc id -> current hp, enemies only (D15); 0 = dead, gone for good
 	world        *world.World                  // read-only: item names for display-name resolution
 }
 
@@ -78,11 +83,17 @@ func NewHub(w *world.World) *Hub {
 		roomItems:    make(map[string][]string),
 		npcTalk:      make(map[string]int),
 		grantedItems: make(map[string]bool),
+		npcHP:        make(map[string]int),
 		world:        w,
 	}
 	for id, loc := range w.Locations {
 		if len(loc.Items) > 0 {
 			h.roomItems[id] = slices.Clone(loc.Items)
+		}
+	}
+	for id, npc := range w.NPCs {
+		if npc.Role == world.RoleEnemy {
+			h.npcHP[id] = npc.Stats.HP
 		}
 	}
 	return h
@@ -187,12 +198,18 @@ func (h *Hub) PlayersIn(room string) []string {
 	return players
 }
 
-// SetRoom moves c to room. Every write to c.room must go through here (never
-// c.room = ... directly) once c is registered, so a concurrent BroadcastRoom
-// or PlayersIn reading c.room under h.mu never races the write.
+// SetRoom moves c to room. Every write to c.room must go through setRoomLocked
+// (never c.room = ... directly) once c is registered, so a concurrent
+// BroadcastRoom or PlayersIn reading c.room under h.mu never races the write.
 func (h *Hub) SetRoom(c *Client, room string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.setRoomLocked(c, room)
+}
+
+// setRoomLocked is SetRoom's body, for callers (combat.go's respawn and
+// flee paths) that already hold h.mu and would deadlock calling SetRoom.
+func (h *Hub) setRoomLocked(c *Client, room string) {
 	c.room = room
 }
 
@@ -278,6 +295,14 @@ func (h *Hub) RoomItems(room string) []string {
 	items := slices.Clone(h.roomItems[room])
 	slices.Sort(items)
 	return items
+}
+
+// Holds reports whether c currently carries item — used by MOVE to check a
+// gated exit's Requires entry.
+func (h *Hub) Holds(c *Client, item string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return c.inventory[item]
 }
 
 // Inventory returns the canonical ids c is carrying, sorted.

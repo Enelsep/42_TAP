@@ -398,14 +398,127 @@ TALK between them need to show.
 
 ---
 
+## D15 — Combat design (RFC §6.1.1)
+
+§6.1.1 delegates turn management, damage, combat states and any extra
+commands to us. Below is the whole system, ratifying the roadmap's T3.7
+proposal.
+
+### No weapons, no regen — HP only moves down, except on respawn
+
+There is no weapon system: `data/world.json`'s items carry no damage field,
+so every player hits for the same flat `PlayerBaseDamage` (15), jittered
+±20% (`rollDamage`, at least 1). NPCs hit back for their own `stats.damage`,
+jittered the same way. `PlayerMaxHP` is 100; there is no HEAL command and no
+natural regen, so the only way back to full health is dying and respawning
+— and respawn lands at `RespawnHP` (50, per the roadmap), not full. A player
+who wins a fight stays wounded until their next death.
+
+### A turn is one ATTACK; the NPC counters synchronously, in the same call
+
+`ATTACK <npc>` resolves entirely inside one lock acquisition
+(`Hub.AttackNPC`): c's hit lands, and if the NPC survives it counters
+immediately, before the handler returns. There is no scheduler, no combat
+session that outlives a single request — the simplest thing that is still
+correctly "turn-based". `404 NPC_NOT_FOUND` if npc isn't there (including a
+dead one — see below), `405 NPC_NOT_HOSTILE` if its role isn't `enemy`.
+
+### Death: NPCs stay dead, players respawn
+
+An NPC reaching 0 HP is marked dead for good — no respawn, matching a MUD
+boss/mini-boss you only fight once. It stops appearing in LOOK, and TALK/
+QUEST/ATTACK all answer `404 NPC_NOT_FOUND` for it from then on, exactly as
+if it had never been there (`Hub.RoomNPC`/`NPCIn`, replacing the old
+world-only `resolveNPC`). Its `drops` fall onto the room's floor, and any
+`kill`-type quest targeting it completes for **every player currently
+holding it active** — not just whoever landed the blow. Shared credit avoids
+inventing a "who gets it in a group" rule for a quest system that otherwise
+has none.
+
+A player reaching 0 HP respawns immediately, inside the same `AttackNPC`
+call: back to the start room at `RespawnHP`, DEFEND cleared. The handler
+then broadcasts the LEAVE/ENTER pair for the old and new rooms, the same
+shape `MOVE` already uses.
+
+### A same-tick race: two players finishing off the same NPC
+
+`AttackNPC` re-checks the NPC's HP as its very first statement, still
+holding the lock. If it is already 0 — killed by someone else between this
+handler's `NPCIn` lookup and this call — the method reports `ok=false` and
+the handler answers `404 NPC_NOT_FOUND`, exactly the reply c would have
+gotten had it asked one tick later. Without this check the second attacker
+would re-run the death branch: drops appended to the room a second time,
+breaking §8.1 uniqueness.
+
+### STATUS's three values, given there is no combat *session*
+
+`healthy` at max HP, `dead` (0 HP), `combat` otherwise. Because no combat
+state outlives a single ATTACK/FLEE call, there is no stored "currently
+fighting" flag to report — `combat` here means "wounded", not "engaged right
+now". `dead` is only ever seen inline, in the AttackReply of the exchange
+that caused it: respawn is synchronous, so a later STATUS call can never
+observe 0 HP.
+
+### Gated exits actually check the item now
+
+A gap left over from before TAKE/DROP existed (T3.3's `handleMove` always
+answered `301 NO_EXIT` on a gated direction, no matter what the player
+carried) is closed as part of this pass: `Hub.Holds` checks the required
+item, and only a player without it is turned away. The `door` → `bossroom`
+exit — the whole reason the hunter drops a `key` — was unreachable until
+this fixed.
+
+**Where.** `core/server/combat.go`; `Hub.Holds` in `core/server/hub.go`;
+`handleAttack`/`handleStatus`/`handleMove` in `core/server/server.go`.
+
+---
+
+## D16 — DEFEND and FLEE: non-RFC, server-side only
+
+**Decision.** Two extra commands, on top of the RFC's fixed command table
+(§2.3), exist only because §6.1.1 explicitly leaves "extra commands" open
+and the roadmap commits to exactly these two: `DEFEND` (no argument →
+bare `OK`) arms a one-shot flag that halves the damage of c's *next*
+counter-attack, from ATTACK or FLEE, whichever comes first. `FLEE` (no
+argument → `OK room=<id>`, same shape as MOVE) forces a move through a
+random exit c could otherwise walk through normally (a gated one without the
+item is never picked), taking one unavoidable hit from any live enemy in the
+room on the way out.
+
+Neither has a notion of "which fight" it belongs to, because nothing in this
+design does (D15): DEFEND's flag is armed until consumed by whatever hits c
+next, even in an unrelated room; FLEE's free hit comes from whatever enemy
+happens to share c's current room, not from "the NPC c was just fighting"
+specifically. This is the simplest reading that needs no new state beyond a
+single bool.
+
+**Rationale — why adding verbs at all is safe.** §2.6's interoperability
+rule says extra commands are a liability *if a peer needs them to
+function*. Ours don't: a client that never sends DEFEND/FLEE plays a
+strictly harder game (every counter-attack lands full, no free escape) but
+never breaks a rule the RFC defines. Our own clients only send them by
+choice; another group's client will simply never emit `DEFEND`/`FLEE` in
+the first place, so their server never has to know these verbs exist. The
+two are added as ordinary `protocol.Verb` values (parsed and formatted like
+any other), not smuggled through `Command.Arg` — round-trip tests cover them
+exactly like RFC verbs, which is what makes them easy to reason about
+despite not being in the spec.
+
+**Where.** `protocol.VerbDefend`, `protocol.VerbFlee`; `Hub.Defend`,
+`Hub.Flee` in `core/server/combat.go`; `handleDefend`, `handleFlee` in
+`core/server/server.go`.
+
+---
+
 ## Still open
 
-- **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn
-  rules. Proposal in roadmap T3.7, to be ratified when the server's combat path
-  is written.
-- **The `boss` room** — name, description and its NPC are still placeholders in
-  `data/world.json`; it is the only room the key unlocks, so it is what the
-  hunter contract ultimately pays for.
+- **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
+  name, dialogue and stats, but `bossroom` carries no `spawns` entry pointing
+  at it, so nothing is actually there to ATTACK yet (confirmed live while
+  testing D15/D16: the door opens with the key exactly as designed, the room
+  is just empty). `bossroom`'s own name and description are placeholders too.
+  It is the only room the key unlocks, so it is what the hunter contract
+  ultimately pays for.
 - **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
   roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide

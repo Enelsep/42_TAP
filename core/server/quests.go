@@ -8,23 +8,16 @@ import (
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
-// resolveNPC finds the NPC standing in room, matched against arg by canonical
-// id or case-insensitive display name — the same resolution rule TAKE/DROP
-// use for items (RFC §8.3/8.4). A room holds at most one NPC (world.Spawn),
-// so unlike items there is nothing to disambiguate between.
-func resolveNPC(w *world.World, room, arg string) *world.NPC {
+// npcAt returns the NPC spawned in room, or nil if there is none — the raw
+// world-data lookup, with no notion of whether an enemy has since been
+// killed. RoomNPC (combat.go) layers that liveness check on top; TALK/QUEST
+// resolve NPCs through Hub.NPCIn, never through this function directly.
+func npcAt(w *world.World, room string) *world.NPC {
 	loc := w.Locations[room]
 	if loc == nil || loc.Spawns == nil {
 		return nil
 	}
-	npc := w.NPCs[loc.Spawns.NPCType]
-	if npc == nil {
-		return nil
-	}
-	if npc.ID == arg || strings.EqualFold(npc.Name, arg) {
-		return npc
-	}
-	return nil
+	return w.NPCs[loc.Spawns.NPCType]
 }
 
 // TalkLine returns npc's next dialogue line, cycling through world.NPC.Dialogue
