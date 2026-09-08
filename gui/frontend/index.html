@@ -19,10 +19,11 @@
         <div class="overlay" id="connect">
             <form class="card" id="connect-form">
                 <h1>The Answer Protocol</h1>
-                <p class="sub">a shared world of sand and signal</p>
-                <label>Server<input id="addr" value="localhost:4242" autocomplete="off" spellcheck="false" /></label>
-                <label>Name<input id="player-name" placeholder="alice" autocomplete="off" spellcheck="false" /></label>
-                <button class="primary" type="submit">Enter</button>
+                <p class="sub">a shared world of sand and mysteries</p>
+                <label>Server<input id="addr" value="localhost:4241" autocomplete="off" spellcheck="false" /></label>
+                <label>Name<input id="player-name" placeholder="benesserit" autocomplete="off"
+                        spellcheck="false" /></label>
+                <button class="primary" type="submit">start</button>
                 <p class="error" id="connect-error"></p>
             </form>
         </div>
@@ -33,11 +34,10 @@
                 <div class="panel identity">
                     <div class="line">
                         <span class="name" id="hud-name">—</span>
-                        <span class="room" id="hud-room">—</span>
                     </div>
                     <div class="hp" title="health">
                         <div class="hp-fill" id="hp-fill"></div>
-                        <span class="hp-text" id="hp-text">—</span>
+                        <span class="hp-text" id="hp-text">hp</span>
                     </div>
                 </div>
                 <div class="top-right">
@@ -51,15 +51,15 @@
             </header>
 
             <aside id="left">
-                <section class="panel">
-                    <h2>Room</h2>
+                <section class="panel room-panel">
+                    <h2>Room : <span class="room" id="hud-room">—</span> </h2>
                     <p class="desc" id="room-desc"></p>
                     <h3>Characters</h3>
                     <ul class="list" id="room-npcs"></ul>
                     <h3>On the ground</h3>
                     <ul class="list" id="room-items"></ul>
                 </section>
-                <section class="panel">
+                <section class="panel inv-panel">
                     <h2>Inventory</h2>
                     <ul class="list" id="inventory"></ul>
                 </section>
@@ -70,7 +70,7 @@
             </aside>
 
             <!-- chat: right side, between the QUIT button and the bottom band -->
-            <aside class="panel" id="chat">
+            <aside class="panel collapsed" id="chat">
                 <div class="tabs" id="chat-tabs">
                     <button class="active" data-scope="ROOM">Room</button>
                     <button data-scope="GLOBAL">Global</button>

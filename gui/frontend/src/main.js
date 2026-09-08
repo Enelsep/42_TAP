@@ -17,6 +17,13 @@ import square from './assets/images/square.png';
 import start from './assets/images/start.png';
 import suburbs from './assets/images/suburbs.png';
 
+import iconKey from './assets/images/items/alien_key.png';
+import iconBone from './assets/images/items/bone.png';
+import iconCrysknife from './assets/images/items/crysknife.png';
+import iconLiquor from './assets/images/items/liquor.png';
+import iconSpice from './assets/images/items/spice.png';
+import iconWater from './assets/images/items/water.png';
+
 import ambienceTrack from './assets/music/ambience.mp3';
 import barTrack from './assets/music/bar.mp3';
 import combatTrack from './assets/music/combat.mp3';
@@ -25,23 +32,27 @@ import shopTrack from './assets/music/shop.mp3';
 import squareTrack from './assets/music/square.mp3';
 import startTrack from './assets/music/start.mp3';
 
-// Room id -> backdrop. Keyed by the canonical ids the server puts on the wire,
-// so a room the world adds later simply shows no art instead of breaking.
 const BACKDROPS = {
     'loc.bar': bar, 'loc.bossroom': boss, 'loc.camp': camp, 'loc.city': city,
     'loc.door': door, 'loc.nest': nest, 'loc.shop': shop, 'loc.square': square,
     'loc.start': start, 'loc.suburbs': suburbs,
 };
 
-// Combat music follows the two enemies. Every other room plays its own track
-// where one exists, and the shared ambience where it does not.
+
 const TRACKS = {
     'loc.nest': combatTrack, 'loc.bossroom': combatTrack,
     'loc.bar': barTrack, 'loc.door': doorTrack, 'loc.shop': shopTrack,
     'loc.square': squareTrack, 'loc.start': startTrack,
 };
 
-const MUSIC_VOLUME = 0.35;
+const MUSIC_VOLUME = 1;
+
+// Item id -> icon. An item with no icon still renders, by name, so another
+// group's world cannot leave the panels blank.
+const ITEM_ICONS = {
+    'item.key': iconKey, 'item.bone': iconBone, 'item.crysknife': iconCrysknife,
+    'item.liquor': iconLiquor, 'item.spice': iconSpice, 'item.water': iconWater,
+};
 
 const DIRECTIONS = ['north', 'south', 'east', 'west'];
 const SCOPES = ['ROOM', 'GLOBAL', 'GROUP'];
@@ -53,6 +64,7 @@ const state = {
     items: [],
     npcs: [],
     inventory: [],
+    roomNames: {}, // room id -> display name, learned by visiting
     chat: { ROOM: [], GLOBAL: [], GROUP: [] },
     scope: 'ROOM',
     backdrop: null,
@@ -86,8 +98,6 @@ function toast(text, isError = false) {
     setTimeout(() => el.remove(), 4000);
 }
 
-// guard runs a backend call and turns a rejected promise — an ERR reply, or a
-// dropped connection — into a toast plus a log line, never an unhandled error.
 async function guard(fn) {
     try {
         return { ok: true, value: await fn() };
@@ -104,66 +114,69 @@ async function guard(fn) {
 
 const music = new Audio();
 music.loop = true;
-music.volume = 0;
+music.preload = 'auto';
 
 let currentTrack = null;
+let currentSrc = null;
 let muted = false;
-let awaitingGesture = false;
+const reported = new Set();
 
-function fadeMusic(target, ms) {
-    return new Promise((resolve) => {
-        const from = music.volume;
-        const started = performance.now();
-        const step = (now) => {
-            const k = Math.min(1, (now - started) / ms);
-            music.volume = Math.max(0, Math.min(1, from + (target - from) * k));
-            if (k < 1) requestAnimationFrame(step); else resolve();
-        };
-        requestAnimationFrame(step);
-    });
+const blobs = new Map();
+
+async function cacheTracks() {
+    const urls = new Set([...Object.values(TRACKS), ambienceTrack]);
+    await Promise.all([...urls].map(async (url) => {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            blobs.set(url, URL.createObjectURL(await response.blob()));
+        } catch (e) {
+            note(`cannot fetch ${url} (${e.message})`);
+        }
+    }));
 }
 
-// A webview may refuse to start audio without a gesture. Entering the world is
-// itself a click, so this rarely fires — but if it does, wait for the next one
-// rather than leaving the world silent for good.
-function resumeOnGesture() {
-    if (awaitingGesture) return;
-    awaitingGesture = true;
-    const resume = () => {
-        awaitingGesture = false;
-        document.removeEventListener('pointerdown', resume);
-        document.removeEventListener('keydown', resume);
-        if (!muted) music.play().then(() => fadeMusic(MUSIC_VOLUME, 600)).catch(() => { });
-    };
-    document.addEventListener('pointerdown', resume);
-    document.addEventListener('keydown', resume);
+function note(text) {
+    if (reported.has(text)) return;
+    reported.add(text);
+    logLine(`music: ${text}`, true);
 }
 
-async function playRoomMusic(roomID) {
-    const track = TRACKS[roomID] || ambienceTrack;
-    if (track === currentTrack) return; // same track: let it keep looping
-    currentTrack = track;
+music.addEventListener('error', () => {
+    note(`cannot load ${music.currentSrc || music.src} (media error ${music.error ? music.error.code : '?'})`);
+});
 
-    // Swap synchronously and fade only the way in. Fading out first would mean
-    // awaiting before the swap, and two quick moves would then leave rival
-    // fades running with the music trailing the room the player is in.
-    music.src = track;
-    music.volume = 0;
-    if (muted) return;
-    try {
-        await music.play();
-    } catch {
-        resumeOnGesture();
-        return;
+music.addEventListener('pause', () => {
+    if (!muted && currentTrack && music.currentTime > 0) {
+        note('the webview paused playback — click anywhere to resume');
     }
-    await fadeMusic(MUSIC_VOLUME, 600);
+});
+
+function playTrack(track) {
+    const src = blobs.get(track) || track;
+    if (src !== currentSrc) {
+        currentTrack = track;
+        currentSrc = src;
+        music.src = src;
+    }
+    if (muted) return;
+    music.volume = MUSIC_VOLUME;
+    music.play().catch((e) => note(`${e.name}: ${e.message}`));
+}
+
+function playRoomMusic(roomID) {
+    playTrack(TRACKS[roomID] || ambienceTrack);
+}
+
+function resumeMusic() {
+    if (!muted && currentTrack && music.paused) playTrack(currentTrack);
 }
 
 function stopMusic() {
     currentTrack = null;
+    currentSrc = null;
     music.pause();
     music.removeAttribute('src');
-    music.volume = 0;
 }
 
 function setMuted(next) {
@@ -171,9 +184,9 @@ function setMuted(next) {
     $('btn-mute').textContent = muted ? 'muted' : 'music';
     $('btn-mute').classList.toggle('off', muted);
     if (muted) {
-        fadeMusic(0, 200).then(() => music.pause());
+        music.pause();
     } else if (currentTrack) {
-        music.play().then(() => fadeMusic(MUSIC_VOLUME, 400)).catch(resumeOnGesture);
+        playTrack(currentTrack);
     }
 }
 
@@ -206,7 +219,15 @@ function listInto(node, entries, emptyText) {
     }
     for (const entry of entries) {
         const li = document.createElement('li');
+        if (entry.icon) {
+            const img = document.createElement('img');
+            img.className = 'row-icon';
+            img.src = entry.icon;
+            img.alt = '';
+            li.append(img);
+        }
         const label = document.createElement('span');
+        label.className = 'row-label';
         label.textContent = entry.label;
         li.append(label);
         if (entry.action) {
@@ -237,22 +258,62 @@ function renderRoom() {
 
     listInto($('room-items'), state.items.map((id) => ({
         label: pretty(id),
+        icon: ITEM_ICONS[id],
         action: 'take',
         onClick: () => takeItem(id),
     })), 'nothing on the ground');
 
     const exits = room.exits || {};
     for (const button of $('compass').querySelectorAll('button')) {
-        button.disabled = !exits[button.dataset.dir];
+        const target = exits[button.dataset.dir];
+        button.disabled = !target;
+        // Only the current room's name comes over the wire, so fall back to the
+        // id until the player has actually been there.
+        if (target) {
+            button.dataset.dest = `to ${state.roomNames[target] || pretty(target)}`;
+        } else {
+            delete button.dataset.dest;
+        }
     }
 }
 
+// The inventory shows icons only — the name arrives as a tooltip on hover, and
+// the icon is itself the drop button, replacing the old per-row DROP.
 function renderInventory() {
-    listInto($('inventory'), state.inventory.map((id) => ({
-        label: pretty(id),
-        action: 'drop',
-        onClick: () => dropItem(id),
-    })), 'empty-handed');
+    const node = $('inventory');
+    node.replaceChildren();
+
+    if (!state.inventory.length) {
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'empty-handed';
+        node.append(li);
+        return;
+    }
+
+    for (const id of state.inventory) {
+        const name = pretty(id);
+        const slot = document.createElement('button');
+        slot.className = 'slot';
+        slot.dataset.name = name;
+        slot.setAttribute('aria-label', `Drop ${name}`);
+        slot.onclick = () => dropItem(id);
+
+        const icon = ITEM_ICONS[id];
+        if (icon) {
+            const img = document.createElement('img');
+            img.src = icon;
+            img.alt = name;
+            slot.append(img);
+        } else {
+            slot.classList.add('no-icon');
+            slot.append(document.createTextNode(name));
+        }
+
+        const li = document.createElement('li');
+        li.append(slot);
+        node.append(li);
+    }
 }
 
 function renderChat() {
@@ -291,6 +352,7 @@ async function refreshRoom() {
     const look = await guard(Look);
     if (!look.ok) return;
     state.room = look.value.room;
+    state.roomNames[look.value.room.id] = look.value.room.name;
     state.players = look.value.players || [];
     state.items = look.value.items || [];
     state.npcs = look.value.npcs || [];
@@ -354,6 +416,9 @@ const asChoices = (ids) => ids.map((id) => ({ label: pretty(id), value: id }));
 // --- actions --------------------------------------------------------------
 
 async function move(dir) {
+    const target = state.room?.exits?.[dir];
+    if (target) playRoomMusic(target);
+
     const moved = await guard(() => Move(dir));
     if (!moved.ok) return;
     logLine(`moved ${dir}`);
@@ -544,10 +609,14 @@ $('connect-form').onsubmit = (e) => {
         $('connect-error').textContent = 'server and name are both required';
         return;
     }
+    playRoomMusic('loc.start'); // inside this click; a later LOOK corrects it
     enterWorld(addr, name);
 };
 
 $('btn-mute').onclick = () => setMuted(!muted);
+
+document.addEventListener('click', resumeMusic);
+document.addEventListener('keydown', resumeMusic);
 
 $('btn-quit').onclick = async () => {
     await guard(Disconnect);
@@ -572,6 +641,9 @@ for (const tab of $('chat-tabs').querySelectorAll('button')) {
     };
 }
 
+$('chat-input').addEventListener('focus', () => $('chat').classList.remove('collapsed'));
+$('chat-input').addEventListener('blur', () => $('chat').classList.add('collapsed'));
+
 $('chat-form').onsubmit = async (e) => {
     e.preventDefault();
     const text = $('chat-input').value.trim();
@@ -591,5 +663,7 @@ document.addEventListener('keydown', (e) => {
 for (const url of Object.values(BACKDROPS)) {
     new Image().src = url;
 }
+
+cacheTracks();
 
 renderChat();
