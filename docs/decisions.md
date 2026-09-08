@@ -516,6 +516,99 @@ despite not being in the spec.
 
 ---
 
+## D17 — Structured logging with `log/slog`, and abuse monitoring (§9.4)
+
+**Decision.** `slog.SetDefault` is set once, in `main`, to a
+`slog.NewJSONHandler(os.Stdout, nil)` — every package under `core/server`
+then just calls the package-level `slog.Info`/`slog.Warn`/`slog.Error`, no
+logger threaded through any constructor. That single line buys the subject's
+whole logging checklist for zero dependencies: JSON output, leveled records,
+and a timestamp on every line, for free from the handler.
+
+### Replies are logged at one choke point, not in every handler
+
+`Client.send` (`hub.go`) is the only function every reply and every
+broadcast passes through — 15+ call sites across `server.go`, plus the
+`Hub`'s own `Broadcast`/`BroadcastRoom`/`BroadcastGroup`/`SendTo` helpers.
+`logReply` hooks there: it reads the line's first token and logs `OK`
+(`status=ok`, the rest of the line as `data`) or `ERR` (`status=err`,
+`code`, `symbol`); anything else — every `EVT` line — is skipped, since a
+broadcast is a notification about someone else's action, not a reply to
+*this* client's command, and logging it here would misattribute it.
+
+**Rationale.** The alternative was adding an explicit log call to every one
+of the ~15 handlers, each producing its own reply. Hooking the single choke
+point instead means no handler can forget to log its outcome, at the cost of
+`hub.go` — otherwise free of any protocol-wire-format knowledge — sniffing
+a line's leading token. That's a real layering blur, accepted deliberately:
+the alternative's blast radius (touch every handler, twice, for the rest of
+the project) was worse than this one function knowing `"OK"` and `"ERR"`
+are the two prefixes that matter.
+
+### What else is logged, and at what level
+
+- **Info** (the default, everything routine): TCP connect/disconnect
+  (`+remote`), every parsed command (`+player, verb, scope, sub, arg`),
+  every OK/ERR reply (above), world-state changes (MOVE already implied by
+  its `room=` reply data; TAKE/DROP explicitly, since nothing logged them
+  before), quest events (`quest accepted`, `quest completed`), and combat
+  events (`npc killed`, `player respawned`).
+- **Warn**: exclusively the two abuse signals below, plus one defensive
+  case — a `Verb` reaching the dispatch switch's `default` arm, which
+  should be unreachable (`ParseCommand` only ever returns a `Verb` with a
+  matching `case`) but would mean a future verb was added to `protocol.go`
+  without a handler wired up here.
+- **Error**: a JSON marshal failure on an outgoing payload (should never
+  happen with these fixed struct shapes; if it does, that is a bug, not a
+  player action) and unrecoverable startup failures (bad world file, listen
+  failure) — `main.go` logs and `os.Exit(1)`s in place of the old
+  `log.Fatalf`, since `slog` has no `Fatal` level of its own.
+
+Ordinary `ERR` replies — walking into a wall, attacking a corpse — are
+**not** Warn. They are normal gameplay outcomes a player triggers directly,
+already fully captured (`status=err`, `code`, `symbol`) at Info. Warn is
+reserved for the two conditions the subject explicitly calls "abuse",
+below, so that grepping a log for `"level":"WARN"` means something specific
+instead of drowning in routine 404s.
+
+### Abuse monitoring (RFC §9.4, SHOULD): counting and logging only
+
+Two independent, mutex-appropriate trackers, both in `abuse.go`:
+
+- **Flood**: `commandRate`, one per `Client`, holds a sliding window of
+  that connection's recent command timestamps. `hit` trims anything older
+  than 2 seconds, appends now, and reports true only on the exact tick the
+  count reaches 20 — so a sustained flood logs one `WARN abuse=flood`, not
+  one per command for as long as it lasts. It lives on the `Client` and is
+  touched only by that connection's own reader goroutine (the same one that
+  already owns `bufio.Scanner`), so — unlike everything in `hub.go` — it
+  needs no lock.
+- **Reconnect**: `reconnectTracker`, one per `Server`, keyed by the remote
+  address's host (port stripped via `net.SplitHostPort`) with the same
+  sliding-window/crossing-tick logic: 3 connections from one host within 10
+  seconds logs one `WARN abuse=reconnect`. Unlike flood tracking, this state
+  outlives any single `Client` — a reconnect is by definition a *new*
+  socket — so it belongs to the `Server` and is mutex-guarded, since every
+  connection's goroutine calls `hit` concurrently in `handleConn`.
+
+**Why counting and logging only, never banning.** The subject and RFC §9.4
+both frame this as monitoring ("SHOULD" track, nothing stronger), and nothing
+in the RFC's command or error tables defines a way to reject a connection
+for rate alone — inventing one would mean either silently dropping packets
+(§9.3 wants a response to malformed input, and dropping a *connection*
+outright is worse) or a wire-visible ban with no RFC error code for it, the
+same objection D5 raised for `NOT_CONNECTED`/`BAD_REQUEST`, but for a far
+riskier feature: a false positive here (a legitimate burst of `LOOK`s while
+sight-reading a new room) would eject a paying — well, playing — customer
+mid-session. Counting and logging costs nothing and gives a human everything
+they need to act; the roadmap's own thresholds (`>20 cmds/2s`, rapid
+reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
+
+**Where.** `core/server/abuse.go`; the `hit` calls in `server.go`'s
+`handleConn`; `slog.SetDefault` in `core/cmd/server/main.go`.
+
+---
+
 ## Still open
 
 - **The `boss` NPC is defined but never placed.** `data/world.json` gives it a

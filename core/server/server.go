@@ -3,10 +3,11 @@ package server
 import (
 	"bufio"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Enelsep/42_TAP/core/protocol"
 	"github.com/Enelsep/42_TAP/core/world"
@@ -15,15 +16,16 @@ import (
 // Server owns the listening socket, the loaded world, and the hub of
 // connected clients.
 type Server struct {
-	addr  string
-	world *world.World
-	hub   *Hub
+	addr    string
+	world   *world.World
+	hub     *Hub
+	reconns *reconnectTracker // abuse monitoring, D17
 }
 
 // New creates a Server that will listen on addr (e.g. ":4242") and place new
 // players in w's start room.
 func New(addr string, w *world.World) *Server {
-	return &Server{addr: addr, world: w, hub: NewHub(w)}
+	return &Server{addr: addr, world: w, hub: NewHub(w), reconns: newReconnectTracker()}
 }
 
 // Run listens on s.addr and blocks, accepting connections until the listener
@@ -34,7 +36,7 @@ func (s *Server) Run() error {
 		return err
 	}
 	defer ln.Close()
-	log.Printf("tap server: listening on %s", s.addr)
+	slog.Info("listening", "addr", s.addr)
 
 	for {
 		conn, err := ln.Accept()
@@ -49,7 +51,11 @@ func (s *Server) Run() error {
 // that parses and dispatches each line, and cleanup on the way out.
 func (s *Server) handleConn(conn net.Conn) {
 	remote := conn.RemoteAddr()
-	log.Printf("tap server: connected %s", remote)
+	remoteStr := remote.String()
+	slog.Info("connected", "remote", remoteStr)
+	if s.reconns.hit(remote, time.Now()) {
+		slog.Warn("abuse", "type", "reconnect", "remote", remoteStr)
+	}
 
 	c := newClient(conn)
 	go c.writeLoop()
@@ -79,7 +85,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		} else {
 			close(c.out)
 		}
-		log.Printf("tap server: disconnected %s", remote)
+		slog.Info("disconnected", "remote", remoteStr, "player", c.name)
 	}()
 
 	c.send(protocol.Greeting + protocol.LineTerm)
@@ -88,11 +94,18 @@ func (s *Server) handleConn(conn net.Conn) {
 	for scanner.Scan() {
 		line := scanner.Text()
 
+		if c.rate.hit(time.Now()) {
+			slog.Warn("abuse", "type", "flood", "player", c.name, "remote", remoteStr)
+		}
+
 		cmd, err := protocol.ParseCommand(line)
 		if err != nil {
 			c.send(protocol.FormatErr(protocol.ErrBadRequest))
 			continue
 		}
+
+		slog.Info("command", "remote", remoteStr, "player", c.name,
+			"verb", cmd.Verb, "scope", cmd.Scope, "sub", cmd.Sub, "arg", cmd.Arg)
 
 		// AUTHENTICATED gate (§3.3): no gameplay before a successful CONNECT.
 		if c.name == "" && cmd.Verb != protocol.VerbConnect && cmd.Verb != protocol.VerbQuit {
@@ -154,7 +167,10 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handleFlee(c)
 
 		default:
-			log.Printf("tap server: %s -> %+v", remote, cmd)
+			// Unreachable in theory — ParseCommand only ever returns a Verb
+			// with a case above — but a WARN here means a future Verb added
+			// to protocol.go without a matching case fails loud, not silent.
+			slog.Warn("unhandled verb", "remote", remoteStr, "player", c.name, "verb", cmd.Verb)
 			c.send(protocol.FormatOK(""))
 		}
 	}
@@ -177,7 +193,7 @@ func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrNameInUse))
 		return
 	}
-	log.Printf("tap server: %s is now %s in %s", c.conn.RemoteAddr(), c.name, c.room)
+	slog.Info("player connected", "remote", c.conn.RemoteAddr().String(), "player", c.name, "room", c.room)
 	c.send(protocol.FormatOK("connected"))
 	s.hub.BroadcastRoom(c.room, protocol.FormatEvent(protocol.Event{
 		Scope:    protocol.EvtRoom,
@@ -212,7 +228,7 @@ func (s *Server) handleLook(c *Client) {
 
 	data, err := json.Marshal(reply)
 	if err != nil {
-		log.Printf("tap server: marshal LookReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "look", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -349,6 +365,7 @@ func (s *Server) handleTake(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrItemNotFound))
 		return
 	}
+	slog.Info("item taken", "player", c.name, "item", id, "room", c.room)
 	c.send(protocol.FormatOK("taken=" + id))
 }
 
@@ -360,6 +377,7 @@ func (s *Server) handleDrop(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrItemNotInInv))
 		return
 	}
+	slog.Info("item dropped", "player", c.name, "item", id, "room", c.room)
 	c.send(protocol.FormatOK("dropped=" + id))
 }
 
@@ -367,7 +385,7 @@ func (s *Server) handleDrop(c *Client, cmd protocol.Command) {
 func (s *Server) handleInventory(c *Client) {
 	data, err := json.Marshal(s.hub.Inventory(c))
 	if err != nil {
-		log.Printf("tap server: marshal inventory for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "inventory", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -382,8 +400,8 @@ func (s *Server) handleTalk(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
 		return
 	}
-	if line, ok := s.hub.CompleteDelivery(c, npc); ok {
-		log.Printf("tap server: %s completed a quest via %s", c.name, npc.ID)
+	if line, quest, ok := s.hub.CompleteDelivery(c, npc); ok {
+		slog.Info("quest completed", "player", c.name, "quest", quest, "npc", npc.ID)
 		c.send(protocol.FormatOK(line))
 		return
 	}
@@ -398,10 +416,13 @@ func (s *Server) handleQuest(c *Client, cmd protocol.Command) {
 		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
 		return
 	}
-	q, description, status, ok := s.hub.QuestInfo(c, npc)
+	q, description, status, justAccepted, ok := s.hub.QuestInfo(c, npc)
 	if !ok {
 		c.send(protocol.FormatErr(protocol.ErrNoQuestAvailable))
 		return
+	}
+	if justAccepted {
+		slog.Info("quest accepted", "player", c.name, "quest", q.ID)
 	}
 	data, err := json.Marshal(protocol.QuestReply{
 		QuestID:     q.ID,
@@ -410,7 +431,7 @@ func (s *Server) handleQuest(c *Client, cmd protocol.Command) {
 		Status:      status,
 	})
 	if err != nil {
-		log.Printf("tap server: marshal QuestReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "quest", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -420,7 +441,7 @@ func (s *Server) handleQuest(c *Client, cmd protocol.Command) {
 func (s *Server) handleQuests(c *Client) {
 	data, err := json.Marshal(s.hub.QuestsFor(c))
 	if err != nil {
-		log.Printf("tap server: marshal QuestsReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "quests", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -451,20 +472,20 @@ func (s *Server) handleAttack(c *Client, cmd protocol.Command) {
 
 	data, err := json.Marshal(reply)
 	if err != nil {
-		log.Printf("tap server: marshal AttackReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "attack", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
 
 	if npcDied {
-		log.Printf("tap server: %s killed %s", c.name, npc.ID)
+		slog.Info("npc killed", "player", c.name, "npc", npc.ID)
 		// Room occupants otherwise only learn npc is gone on their next LOOK.
 		s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
 			Scope: protocol.EvtRoom, Kind: protocol.KindNPCDeath, NPC: npc.ID,
 		}), c) // c already knows: its own AttackReply carries target_hp:0
 	}
 	if respawned {
-		log.Printf("tap server: %s died to %s and respawned in %s", c.name, npc.ID, s.world.Start)
+		slog.Info("player respawned", "player", c.name, "cause", npc.ID, "room", s.world.Start)
 		s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
 			Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceLeave, Player: c.name,
 		}), nil)
@@ -478,7 +499,7 @@ func (s *Server) handleAttack(c *Client, cmd protocol.Command) {
 func (s *Server) handleStatus(c *Client) {
 	data, err := json.Marshal(s.hub.StatusOf(c))
 	if err != nil {
-		log.Printf("tap server: marshal StatusReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "status", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -505,7 +526,7 @@ func (s *Server) handleFlee(c *Client) {
 
 	data, err := json.Marshal(reply)
 	if err != nil {
-		log.Printf("tap server: marshal FleeReply for %s: %v", c.name, err)
+		slog.Error("marshal failed", "player", c.name, "reply", "flee", "err", err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))
@@ -517,7 +538,7 @@ func (s *Server) handleFlee(c *Client) {
 		Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceEnter, Player: c.name,
 	}), c)
 	if respawned {
-		log.Printf("tap server: %s died fleeing and respawned in %s", c.name, reply.Room)
+		slog.Info("player respawned", "player", c.name, "cause", "flee", "room", reply.Room)
 	}
 }
 

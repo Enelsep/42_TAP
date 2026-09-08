@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -28,6 +29,8 @@ type Client struct {
 
 	hp        int  // current HP; see PlayerMaxHP/RespawnHP in combat.go (D15)
 	defending bool // DEFEND armed: halves the damage of the next hit taken
+
+	rate commandRate // flood tracking (D17); touched only by this client's reader goroutine
 }
 
 func newClient(conn net.Conn) *Client {
@@ -43,9 +46,28 @@ func newClient(conn net.Conn) *Client {
 // send enqueues line without blocking. If the client's buffer is full, the
 // line is dropped rather than stalling whoever is broadcasting.
 func (c *Client) send(line string) {
+	logReply(c.name, line)
 	select {
 	case c.out <- line:
 	default:
+	}
+}
+
+// logReply logs the OK/ERR outcome of one reply, the moment it is handed to
+// send — every handler's outcome ends up here without threading a logger
+// through all of them (D17). Every broadcast helper (Broadcast, BroadcastRoom,
+// BroadcastGroup, SendTo) also funnels through send, but an EVT line matches
+// neither prefix and is skipped: it is a notification about someone else's
+// action, not a reply to this client's own command, and logging it here
+// would misattribute it.
+func logReply(player, line string) {
+	head, rest, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+	switch head {
+	case "OK":
+		slog.Info("reply", "player", player, "status", "ok", "data", rest)
+	case "ERR":
+		code, symbol, _ := strings.Cut(rest, " ")
+		slog.Info("reply", "player", player, "status", "err", "code", code, "symbol", symbol)
 	}
 }
 
