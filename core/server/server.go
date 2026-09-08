@@ -132,6 +132,15 @@ func (s *Server) handleConn(conn net.Conn) {
 		case protocol.VerbInventory:
 			s.handleInventory(c)
 
+		case protocol.VerbTalk:
+			s.handleTalk(c, cmd)
+
+		case protocol.VerbQuest:
+			s.handleQuest(c, cmd)
+
+		case protocol.VerbQuests:
+			s.handleQuests(c)
+
 		default:
 			log.Printf("tap server: %s -> %+v", remote, cmd)
 			c.send(protocol.FormatOK(""))
@@ -348,6 +357,59 @@ func (s *Server) handleInventory(c *Client) {
 	data, err := json.Marshal(s.hub.Inventory(c))
 	if err != nil {
 		log.Printf("tap server: marshal inventory for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+}
+
+// handleTalk replies with the NPC's next dialogue line — or, if this TALK
+// just closed a deliver quest, the quest's own Complete line instead (D10:
+// completion is a side effect of the RFC commands, never a separate reply).
+func (s *Server) handleTalk(c *Client, cmd protocol.Command) {
+	npc := resolveNPC(s.world, c.room, cmd.Arg)
+	if npc == nil {
+		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
+		return
+	}
+	if line, ok := s.hub.CompleteDelivery(c, npc); ok {
+		log.Printf("tap server: %s completed a quest via %s", c.name, npc.ID)
+		c.send(protocol.FormatOK(line))
+		return
+	}
+	c.send(protocol.FormatOK(s.hub.TalkLine(npc)))
+}
+
+// handleQuest replies with the quest npc offers, accepting it on the spot if
+// this is the first time c has asked (D10 — QUEST is both offer and accept).
+func (s *Server) handleQuest(c *Client, cmd protocol.Command) {
+	npc := resolveNPC(s.world, c.room, cmd.Arg)
+	if npc == nil {
+		c.send(protocol.FormatErr(protocol.ErrNPCNotFound))
+		return
+	}
+	q, description, status, ok := s.hub.QuestInfo(c, npc)
+	if !ok {
+		c.send(protocol.FormatErr(protocol.ErrNoQuestAvailable))
+		return
+	}
+	data, err := json.Marshal(protocol.QuestReply{
+		QuestID:     q.ID,
+		Description: description,
+		Reward:      q.Reward,
+		Status:      status,
+	})
+	if err != nil {
+		log.Printf("tap server: marshal QuestReply for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+}
+
+// handleQuests replies with every quest c has taken, active or completed.
+func (s *Server) handleQuests(c *Client) {
+	data, err := json.Marshal(s.hub.QuestsFor(c))
+	if err != nil {
+		log.Printf("tap server: marshal QuestsReply for %s: %v", c.name, err)
 		return
 	}
 	c.send(protocol.FormatOK(string(data)))

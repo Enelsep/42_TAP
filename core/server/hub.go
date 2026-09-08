@@ -20,10 +20,20 @@ type Client struct {
 	room      string          // canonical room id; only meaningful once name != ""
 	group     string          // group id; empty means "not in a group"
 	inventory map[string]bool // canonical item ids currently held
+
+	// quests holds only "active" and "completed" entries (protocol.QuestActive
+	// / protocol.QuestCompleted): a quest a player has never accepted is simply
+	// absent, which is what D10 calls the implicit "available" state.
+	quests map[string]string
 }
 
 func newClient(conn net.Conn) *Client {
-	return &Client{conn: conn, out: make(chan string, 64), inventory: map[string]bool{}}
+	return &Client{
+		conn:      conn,
+		out:       make(chan string, 64),
+		inventory: map[string]bool{},
+		quests:    map[string]string{},
+	}
 }
 
 // send enqueues line without blocking. If the client's buffer is full, the
@@ -55,6 +65,7 @@ type Hub struct {
 	clients   map[string]*Client
 	groups    map[string]map[string]*Client // group id -> members, by name
 	roomItems map[string][]string           // room id -> item ids on the floor
+	npcTalk   map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
 	world     *world.World                  // read-only: item names for display-name resolution
 }
 
@@ -64,6 +75,7 @@ func NewHub(w *world.World) *Hub {
 		clients:   make(map[string]*Client),
 		groups:    make(map[string]map[string]*Client),
 		roomItems: make(map[string][]string),
+		npcTalk:   make(map[string]int),
 		world:     w,
 	}
 	for id, loc := range w.Locations {

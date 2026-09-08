@@ -353,6 +353,31 @@ displays what they just typed.
 
 ---
 
+## D14 — TALK cycles dialogue; QUEST's `description` reuses the quest's own lines
+
+**Decision.** `TALK <npc>` walks `npc.Dialogue` in order and wraps around —
+one cursor per NPC, shared by every player who talks to it, not randomized
+and not per-player. `QUEST <npc>`'s `description` field is
+`quest.Dialogue.Offer` the first time a player calls it for a given quest
+(the same call that accepts it — D10 has no separate accept step), and
+`quest.Dialogue.Active` on every call after that, while the quest is active.
+Once completed, QUEST answers `406` (D10), so `Complete` is never a QUEST
+response — it is what `TALK <target>` returns when it closes a deliver
+quest.
+
+**Rationale.** Cycling is deterministic and testable — a round-trip test can
+assert the exact line, not just membership. A single shared cursor is the
+simplest thing that works under the existing global-mutex model and costs
+nothing, since dialogue is flavor text, not player state. Reusing the
+quest's own offer/active/complete triad for `description` needs no new data
+field: `world.Quest` (D10) already carries exactly the three lines QUEST and
+TALK between them need to show.
+
+**Where.** `Hub.TalkLine`, `Hub.QuestInfo`, `Hub.CompleteDelivery` in
+`core/server/quests.go`.
+
+---
+
 ## Still open
 
 - **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn
