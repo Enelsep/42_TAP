@@ -534,7 +534,11 @@ broadcast passes through — 15+ call sites across `server.go`, plus the
 (`status=ok`, the rest of the line as `data`) or `ERR` (`status=err`,
 `code`, `symbol`); anything else — every `EVT` line — is skipped, since a
 broadcast is a notification about someone else's action, not a reply to
-*this* client's command, and logging it here would misattribute it.
+*this* client's command, and logging it here would misattribute it. `data`
+is capped at `maxLoggedReplyData` (200 bytes, `data_len` added when it
+truncates): LOOK's room JSON can run well past that on a room with a full
+item/NPC list, and logging it whole on every LOOK buries the commands a
+human tailing the log actually cares about under repeated room dumps.
 
 **Rationale.** The alternative was adding an explicit log call to every one
 of the ~15 handlers, each producing its own reply. Hooking the single choke

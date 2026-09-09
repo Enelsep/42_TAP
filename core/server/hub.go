@@ -53,6 +53,12 @@ func (c *Client) send(line string) {
 	}
 }
 
+// maxLoggedReplyData caps how much of an OK reply's data logReply embeds
+// verbatim. LOOK's room JSON alone can run past this on a room with a full
+// item/NPC list, and logging it whole on every LOOK drowns a log tail in
+// room dumps instead of the player actions D17 actually wants visible.
+const maxLoggedReplyData = 200
+
 // logReply logs the OK/ERR outcome of one reply, the moment it is handed to
 // send — every handler's outcome ends up here without threading a logger
 // through all of them (D17). Every broadcast helper (Broadcast, BroadcastRoom,
@@ -64,7 +70,12 @@ func logReply(player, line string) {
 	head, rest, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
 	switch head {
 	case "OK":
-		slog.Info("reply", "player", player, "status", "ok", "data", rest)
+		if len(rest) > maxLoggedReplyData {
+			slog.Info("reply", "player", player, "status", "ok",
+				"data", rest[:maxLoggedReplyData]+"…(truncated)", "data_len", len(rest))
+		} else {
+			slog.Info("reply", "player", player, "status", "ok", "data", rest)
+		}
 	case "ERR":
 		code, symbol, _ := strings.Cut(rest, " ")
 		slog.Info("reply", "player", player, "status", "err", "code", code, "symbol", symbol)

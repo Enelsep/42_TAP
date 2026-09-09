@@ -58,6 +58,15 @@ func newReconnectTracker() *reconnectTracker {
 // and reports whether it just crossed reconnectThreshold within
 // reconnectWindow — true only on the crossing tick, same reasoning as
 // commandRate.hit.
+//
+// Trimming t.recent[host] alone would never shrink the map itself: a host
+// that connects once and never again keeps a one-entry slice forever, so
+// over a long-running server's life the map grows by one key per distinct
+// address ever seen. hit already walks the whole map's worth of state on
+// every call once you count the per-host trim, so it also sweeps every
+// *other* host down to nothing and drops the ones that go empty — bounding
+// the map to addresses actually active within the last reconnectWindow, at
+// no extra lock acquisition.
 func (t *reconnectTracker) hit(addr net.Addr, now time.Time) bool {
 	host, _, err := net.SplitHostPort(addr.String())
 	if err != nil {
@@ -67,12 +76,20 @@ func (t *reconnectTracker) hit(addr net.Addr, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	cutoff := now.Add(-reconnectWindow)
-	kept := t.recent[host][:0]
-	for _, at := range t.recent[host] {
-		if at.After(cutoff) {
-			kept = append(kept, at)
+	for h, ats := range t.recent {
+		kept := ats[:0]
+		for _, at := range ats {
+			if at.After(cutoff) {
+				kept = append(kept, at)
+			}
+		}
+		if len(kept) == 0 {
+			delete(t.recent, h)
+		} else {
+			t.recent[h] = kept
 		}
 	}
-	t.recent[host] = append(kept, now)
+
+	t.recent[host] = append(t.recent[host], now)
 	return len(t.recent[host]) == reconnectThreshold
 }
