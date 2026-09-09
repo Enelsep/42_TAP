@@ -648,6 +648,8 @@ EventsOn('tap:evt', (event) => {
     }
     if (event.kind === 'NPC_DEATH') {
         logLine(`${pretty(event.npc || 'something')} falls`);
+        // Someone else landed the last blow: there is nothing left to fight.
+        if (event.npc === combatTarget) closeCombat();
         refreshRoom(); // whatever it dropped is on the floor now
         return;
     }
@@ -667,6 +669,11 @@ EventsOn('tap:disconnected', () => {
 
 function showConnect() {
     stopMusic();
+    // Any modal still up would sit on top of the connect form. Cancelling
+    // the picker rather than hiding it also settles whoever is awaiting it.
+    closeCombat();
+    $('quests').hidden = true;
+    $('picker-cancel').onclick?.();
     $('hud').hidden = true;
     $('connect').hidden = false;
     $('connect-error').textContent = '';
