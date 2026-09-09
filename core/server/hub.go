@@ -20,10 +20,20 @@ type Client struct {
 	room      string          // canonical room id; only meaningful once name != ""
 	group     string          // group id; empty means "not in a group"
 	inventory map[string]bool // canonical item ids currently held
+
+	// quests holds only "active" and "completed" entries (protocol.QuestActive
+	// / protocol.QuestCompleted): a quest a player has never accepted is simply
+	// absent, which is what D10 calls the implicit "available" state.
+	quests map[string]string
 }
 
 func newClient(conn net.Conn) *Client {
-	return &Client{conn: conn, out: make(chan string, 64), inventory: map[string]bool{}}
+	return &Client{
+		conn:      conn,
+		out:       make(chan string, 64),
+		inventory: map[string]bool{},
+		quests:    map[string]string{},
+	}
 }
 
 // send enqueues line without blocking. If the client's buffer is full, the
@@ -51,20 +61,24 @@ func (c *Client) writeLoop() {
 // of the game's mutable state behind one lock, per the roadmap's concurrency
 // model.
 type Hub struct {
-	mu        sync.Mutex
-	clients   map[string]*Client
-	groups    map[string]map[string]*Client // group id -> members, by name
-	roomItems map[string][]string           // room id -> item ids on the floor
-	world     *world.World                  // read-only: item names for display-name resolution
+	mu           sync.Mutex
+	clients      map[string]*Client
+	groups       map[string]map[string]*Client // group id -> members, by name
+	roomItems    map[string][]string           // room id -> item ids on the floor
+	npcTalk      map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
+	grantedItems map[string]bool               // quest grant/reward item ids already created once, see grantOnceLocked
+	world        *world.World                  // read-only: item names for display-name resolution
 }
 
 // NewHub seeds the dynamic floor-item state from w's static placement.
 func NewHub(w *world.World) *Hub {
 	h := &Hub{
-		clients:   make(map[string]*Client),
-		groups:    make(map[string]map[string]*Client),
-		roomItems: make(map[string][]string),
-		world:     w,
+		clients:      make(map[string]*Client),
+		groups:       make(map[string]map[string]*Client),
+		roomItems:    make(map[string][]string),
+		npcTalk:      make(map[string]int),
+		grantedItems: make(map[string]bool),
+		world:        w,
 	}
 	for id, loc := range w.Locations {
 		if len(loc.Items) > 0 {
@@ -91,6 +105,11 @@ func (h *Hub) Register(c *Client) bool {
 // channel, which stops its writeLoop goroutine. A client left behind in any
 // index is a ghost: the next broadcast to it sends on a closed channel and
 // panics the whole process, not just that connection.
+//
+// c's inventory is dropped onto its current room's floor first. Without
+// this a disconnect destroyed whatever c was carrying — for the hunter's
+// key, the only way into bossroom and with no other source once the hunter
+// is dead (D15), that meant one QUIT could lock the room for good.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -105,7 +124,24 @@ func (h *Hub) Unregister(c *Client) {
 		}
 	}
 	c.group = ""
+	for id := range c.inventory {
+		h.roomItems[c.room] = append(h.roomItems[c.room], id)
+	}
 	close(c.out)
+}
+
+// grantOnceLocked creates itemID into c's inventory the first time it is
+// requested for a quest grant or reward, and does nothing on every later
+// call for the same id — item ids are unique instances (RFC §8), the same
+// invariant TakeItem already relies on, and quest grants/rewards were the
+// one path that instead handed a fresh copy to every simultaneous holder.
+// h.mu must already be held.
+func (h *Hub) grantOnceLocked(c *Client, itemID string) {
+	if h.grantedItems[itemID] {
+		return
+	}
+	h.grantedItems[itemID] = true
+	c.inventory[itemID] = true
 }
 
 // Broadcast enqueues line to every registered client.

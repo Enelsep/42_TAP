@@ -217,13 +217,23 @@ once completed, since both our quests have a single objective.
 
 `QUEST <npc>` is the only entry point. Each quest-giver carries a `quest`
 back-pointer in the world data, so the lookup is direct. `406
-NO_QUEST_AVAILABLE` covers three cases: the NPC gives no quest, the player has
-already completed it, or the player already holds it — the RFC explicitly folds
-"already completed" into this code.
+NO_QUEST_AVAILABLE` covers two cases: the NPC gives no quest, or the player has
+already completed it — the RFC explicitly folds "already completed" into this
+code. Calling it again while the quest is active is not a third case: D14
+returns `OK` with the quest's `active` dialogue line, same as any other
+`QUEST` call on a giver whose quest is in progress.
 
 Accepting a quest may hand the player an item, declared as `grants` on the
-quest. This is the only way an `obtainable: false` item enters the world: the
-flag means "cannot be picked up off the floor", not "does not exist".
+quest — but `grants` is not the only way an `obtainable: false` item enters
+the world: the hunter's `key` arrives as an NPC `drops` entry, and
+`water`/`crysknife` arrive as quest `reward`s. The flag is also not enforced
+at `TAKE`: an `obtainable: false` item already on the floor (the key, once
+dropped) can still be picked up, and must be able to — a hunter killed
+before the contract is taken would otherwise leave the boss room
+permanently unreachable, the same reasoning the drop-vs-reward choice below
+already relies on. `obtainable: false` only means "must never appear in a
+location's static `items` list" — enforced by `World.Validate`
+(`core/world/validate.go`) at load time — nothing more.
 
 ### Completion is automatic, and there are no extra commands
 
@@ -245,9 +255,19 @@ RFC does not define.
 
 ### Rewards, and why the key is a drop rather than a reward
 
-Rewards are item instances created into the player's inventory on completion —
-`crysknife` for the delivery, `water` for the contract. Neither exists anywhere
-else in the world, so uniqueness (§8.1) holds by construction.
+Rewards are item instances created into the player's inventory on
+completion — `crysknife` for the delivery, `water` for the contract.
+Neither exists anywhere else in the *static* world, but "holds by
+construction" was single-player reasoning: two players independently
+finishing the same quest — or, for a `kill` quest, two holding it active
+when the target dies — each triggered their own creation, so the same
+canonical id existed twice at once, exactly what `checkItemSources`
+rejects for the static data. `Hub.grantOnceLocked` now gates every dynamic
+creation (`grants` and `reward` alike) so the id is created once, on
+whichever call reaches it first; later completions still update that
+player's own quest state, matching the kill quest's shared-credit design
+below, they just don't manifest a second copy of an item this world treats
+as a singleton.
 
 The hunter's `key` is deliberately **not** the kill quest's reward. It is an NPC
 `drops` entry: on death the key falls into the room. If it were the reward, a
@@ -350,6 +370,31 @@ displays what they just typed.
 
 **Where.** `Hub.BroadcastRoom`/`BroadcastGroup` calls in
 `core/server/server.go`: `except: c` for presence, `except: nil` for chat.
+
+---
+
+## D14 — TALK cycles dialogue; QUEST's `description` reuses the quest's own lines
+
+**Decision.** `TALK <npc>` walks `npc.Dialogue` in order and wraps around —
+one cursor per NPC, shared by every player who talks to it, not randomized
+and not per-player. `QUEST <npc>`'s `description` field is
+`quest.Dialogue.Offer` the first time a player calls it for a given quest
+(the same call that accepts it — D10 has no separate accept step), and
+`quest.Dialogue.Active` on every call after that, while the quest is active.
+Once completed, QUEST answers `406` (D10), so `Complete` is never a QUEST
+response — it is what `TALK <target>` returns when it closes a deliver
+quest.
+
+**Rationale.** Cycling is deterministic and testable — a round-trip test can
+assert the exact line, not just membership. A single shared cursor is the
+simplest thing that works under the existing global-mutex model and costs
+nothing, since dialogue is flavor text, not player state. Reusing the
+quest's own offer/active/complete triad for `description` needs no new data
+field: `world.Quest` (D10) already carries exactly the three lines QUEST and
+TALK between them need to show.
+
+**Where.** `Hub.TalkLine`, `Hub.QuestInfo`, `Hub.CompleteDelivery` in
+`core/server/quests.go`.
 
 ---
 
