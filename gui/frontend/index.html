@@ -83,6 +83,15 @@
                 </form>
             </aside>
 
+            <!-- NPC speech: centre stage, streamed a character at a time -->
+            <section class="panel" hidden id="dialogue">
+                <div class="dialogue-head">
+                    <h2 id="dialogue-speaker"></h2>
+                    <button id="dialogue-close" title="close" type="button">×</button>
+                </div>
+                <p class="dialogue-text" id="dialogue-text"></p>
+            </section>
+
             <section id="controls">
                 <div class="compass" id="compass">
                     <button data-dir="north" style="grid-area:n">north</button>

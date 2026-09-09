@@ -99,6 +99,71 @@ function toast(text, isError = false) {
     setTimeout(() => el.remove(), 4000);
 }
 
+// --- dialogue box ---------------------------------------------------------
+
+const TYPE_MS = 24; // per character
+// A beat on punctuation is most of what makes the crawl read as speech
+// rather than as a progress bar.
+const TYPE_PAUSE = { ',': 130, ';': 130, ':': 130, '.': 210, '!': 210, '?': 210, '\u2014': 170 };
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+let typeTimer = null;
+let typeFull = '';
+
+function stopTyping() {
+    clearTimeout(typeTimer);
+    typeTimer = null;
+    $('dialogue').classList.remove('typing');
+}
+
+// Drops the rest of the line in at once — the classic "click to skip".
+function finishTyping() {
+    if (!typeTimer) return;
+    $('dialogue-text').textContent = typeFull;
+    stopTyping();
+}
+
+// Streams text one code point at a time. Array.from is what keeps a
+// multi-unit character whole: the being beyond the veil speaks in symbols,
+// and indexing a JS string would tear a surrogate pair in half.
+function typeInto(text) {
+    stopTyping();
+    const node = $('dialogue-text');
+    const chars = Array.from(text);
+    typeFull = text;
+    node.textContent = '';
+
+    if (!chars.length || REDUCED_MOTION.matches) {
+        node.textContent = text;
+        return;
+    }
+
+    $('dialogue').classList.add('typing');
+    let i = 0;
+    const step = () => {
+        node.textContent += chars[i];
+        const pause = TYPE_PAUSE[chars[i]] ?? 0;
+        if (++i >= chars.length) {
+            stopTyping();
+            return;
+        }
+        typeTimer = setTimeout(step, TYPE_MS + pause);
+    };
+    step();
+}
+
+function showDialogue(speaker, text) {
+    $('dialogue-speaker').textContent = speaker;
+    $('dialogue').hidden = false;
+    typeInto(text);
+}
+
+function closeDialogue() {
+    stopTyping();
+    $('dialogue').hidden = true;
+}
+
 async function guard(fn) {
     try {
         return { ok: true, value: await fn() };
@@ -352,6 +417,8 @@ function renderHealth({ hp, max_hp }) {
 async function refreshRoom() {
     const look = await guard(Look);
     if (!look.ok) return;
+    const previous = state.room?.id;
+    if (previous && previous !== look.value.room.id) closeDialogue();
     state.room = look.value.room;
     state.roomNames[look.value.room.id] = look.value.room.name;
     state.players = look.value.players || [];
@@ -444,6 +511,7 @@ async function talkTo(id) {
     const said = await guard(() => Talk(id));
     if (!said.ok) return;
     logLine(`${pretty(id)}: ${said.value}`);
+    showDialogue(pretty(id), said.value);
     // Talking to a delivery target completes the quest server-side: the
     // carried item is consumed and the reward granted, and neither shows up
     // until we ask again.
@@ -510,6 +578,7 @@ async function askQuest(id) {
     const q = quest.value;
     state.questGivers[q.quest_id] = pretty(id); // the only place the giver is known
     logLine(`${pretty(id)}: ${q.description}`);
+    showDialogue(pretty(id), q.description);
     logLine(`quest ${pretty(q.quest_id)} — ${QUEST_LABELS[q.status] || q.status}, reward ${pretty(q.reward)}`);
     await refreshInventory(); // accepting can grant the quest item on the spot
 }
@@ -748,6 +817,9 @@ $('btn-flee').onclick = flee;
 $('combat-close').onclick = closeCombat;
 $('quests-close').onclick = () => { $('quests').hidden = true; };
 
+$('dialogue-close').onclick = closeDialogue;
+$('dialogue-text').onclick = finishTyping;
+
 $('chat-input').addEventListener('focus', () => $('chat').classList.remove('collapsed'));
 $('chat-input').addEventListener('blur', () => $('chat').classList.add('collapsed'));
 
@@ -762,6 +834,10 @@ $('chat-form').onsubmit = async (e) => {
 // Keep the compass usable from the keyboard, except while typing.
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || $('hud').hidden) return;
+    if (e.key === 'Escape' && !$('dialogue').hidden) {
+        if (typeTimer) finishTyping(); else closeDialogue();
+        return;
+    }
     const dir = { ArrowUp: 'north', ArrowDown: 'south', ArrowLeft: 'west', ArrowRight: 'east' }[e.key];
     if (dir && state.room?.exits?.[dir]) move(dir);
 });
