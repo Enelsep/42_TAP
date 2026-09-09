@@ -2,29 +2,38 @@ package main
 
 import (
 	"flag"
-	"log"
+	"log/slog"
+	"os"
 
 	"github.com/Enelsep/42_TAP/core/server"
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
 func main() {
+	// JSON, leveled, timestamped — the whole of the subject's logging
+	// checklist, for zero dependencies (D17). Every package under
+	// core/server logs through this default logger.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	addr := flag.String("addr", ":4241", "listen address")
 	path := flag.String("world", "data/world.json", "world data file")
 	flag.Parse()
 
 	w, err := world.Load(*path)
 	if err != nil {
-		log.Fatalf("tap server: %v", err)
+		slog.Error("world load failed", "path", *path, "err", err)
+		os.Exit(1)
 	}
 	if err := w.Validate(); err != nil {
-		log.Fatalf("tap server: %s is invalid:\n%v", *path, err)
+		slog.Error("world invalid", "path", *path, "err", err)
+		os.Exit(1)
 	}
-	log.Printf("tap server: loaded %s — %d rooms, %d items, %d npcs, %d quests",
-		*path, len(w.Locations), len(w.Items), len(w.NPCs), len(w.Quests))
+	slog.Info("world loaded", "path", *path,
+		"rooms", len(w.Locations), "items", len(w.Items), "npcs", len(w.NPCs), "quests", len(w.Quests))
 
 	srv := server.New(*addr, w)
 	if err := srv.Run(); err != nil {
-		log.Fatalf("tap server: %v", err)
+		slog.Error("server stopped", "err", err)
+		os.Exit(1)
 	}
 }

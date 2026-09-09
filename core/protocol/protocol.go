@@ -32,6 +32,12 @@ const (
 	VerbStatus    Verb = "STATUS"    // STATUS                      → OK <StatusReply JSON>
 	VerbQuest     Verb = "QUEST"     // QUEST <npc>                 → OK <QuestReply JSON>
 	VerbQuests    Verb = "QUESTS"    // QUESTS                      → OK <QuestsReply JSON>
+
+	// Non-RFC (§2.6, D16): our own combat extras. Never required for
+	// interop — our clients need not send them against another group's
+	// server, and another group's client will simply never send them to us.
+	VerbDefend Verb = "DEFEND" // DEFEND                      → OK
+	VerbFlee   Verb = "FLEE"   // FLEE                         → OK <FleeReply JSON>
 )
 
 type ChatScope string
@@ -164,11 +170,12 @@ const (
 type EventKind string
 
 const (
-	KindPresence EventKind = "PRESENCE" // ROOM only, carries a Presence
-	KindChat     EventKind = "CHAT"     // ROOM, GLOBAL and GROUP
-	KindInvite   EventKind = "INVITE"   // GROUP only
-	KindJoin     EventKind = "JOIN"     // GROUP only
-	KindLeave    EventKind = "LEAVE"    // GROUP only
+	KindPresence EventKind = "PRESENCE"  // ROOM only, carries a Presence
+	KindChat     EventKind = "CHAT"      // ROOM, GLOBAL and GROUP
+	KindInvite   EventKind = "INVITE"    // GROUP only
+	KindJoin     EventKind = "JOIN"      // GROUP only
+	KindLeave    EventKind = "LEAVE"     // GROUP only
+	KindNPCDeath EventKind = "NPC_DEATH" // ROOM only, carries an NPC id
 )
 
 // Presence is the third token of a room presence event.
@@ -188,6 +195,7 @@ type Event struct {
 	Kind     EventKind  `json:"kind,omitempty"`     // empty for EvtStats
 	Presence Presence   `json:"presence,omitempty"` // KindPresence only
 	Player   string     `json:"player,omitempty"`   // subject of the event
+	NPC      string     `json:"npc,omitempty"`      // KindNPCDeath only, canonical id
 	Message  string     `json:"message,omitempty"`  // KindChat only
 	Players  int        `json:"players,omitempty"`  // EvtStats only
 
@@ -228,7 +236,7 @@ func ParseCommand(line string) (Command, error) {
 	c := Command{Verb: Verb(strings.ToUpper(verb)), Arg: rest}
 
 	switch c.Verb {
-	case VerbLook, VerbQuit, VerbWho, VerbInventory, VerbStatus, VerbQuests:
+	case VerbLook, VerbQuit, VerbWho, VerbInventory, VerbStatus, VerbQuests, VerbDefend, VerbFlee:
 		c.Arg = "" // takes no argument; trailing tokens are ignored
 
 	case VerbConnect:
@@ -365,6 +373,8 @@ func ParseEvent(line string) (Event, error) {
 		e.Player, e.Message = cut(rest)
 	case KindInvite, KindJoin, KindLeave:
 		e.Player, _ = cut(rest) // trailing tokens ignored (D4)
+	case KindNPCDeath:
+		e.NPC, _ = cut(rest)
 	}
 	return e, nil
 }
@@ -380,6 +390,9 @@ func FormatEvent(e Event) string {
 	}
 	if e.Player != "" {
 		parts = append(parts, e.Player)
+	}
+	if e.NPC != "" {
+		parts = append(parts, e.NPC)
 	}
 	if e.Message != "" {
 		parts = append(parts, e.Message)

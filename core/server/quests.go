@@ -8,23 +8,16 @@ import (
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
-// resolveNPC finds the NPC standing in room, matched against arg by canonical
-// id or case-insensitive display name — the same resolution rule TAKE/DROP
-// use for items (RFC §8.3/8.4). A room holds at most one NPC (world.Spawn),
-// so unlike items there is nothing to disambiguate between.
-func resolveNPC(w *world.World, room, arg string) *world.NPC {
+// npcAt returns the NPC spawned in room, or nil if there is none — the raw
+// world-data lookup, with no notion of whether an enemy has since been
+// killed. RoomNPC (combat.go) layers that liveness check on top; TALK/QUEST
+// resolve NPCs through Hub.NPCIn, never through this function directly.
+func npcAt(w *world.World, room string) *world.NPC {
 	loc := w.Locations[room]
 	if loc == nil || loc.Spawns == nil {
 		return nil
 	}
-	npc := w.NPCs[loc.Spawns.NPCType]
-	if npc == nil {
-		return nil
-	}
-	if npc.ID == arg || strings.EqualFold(npc.Name, arg) {
-		return npc
-	}
-	return nil
+	return w.NPCs[loc.Spawns.NPCType]
 }
 
 // TalkLine returns npc's next dialogue line, cycling through world.NPC.Dialogue
@@ -43,8 +36,9 @@ func (h *Hub) TalkLine(npc *world.NPC) string {
 // item is consumed, the reward is granted, state becomes completed (D10). ok
 // reports whether a completion happened; line is the quest's Complete
 // dialogue — spoken by the target, per world.QuestDialogue — meant to replace
-// npc's own TalkLine for this reply, never to be combined with it.
-func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line string, ok bool) {
+// npc's own TalkLine for this reply, never to be combined with it. quest is
+// the completed quest's id, for the caller to log (D17).
+func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line, quest string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, q := range h.world.Quests {
@@ -57,19 +51,20 @@ func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line string, ok bool)
 		delete(c.inventory, q.Grants)
 		h.grantOnceLocked(c, q.Reward)
 		c.quests[q.ID] = protocol.QuestCompleted
-		return q.Dialogue.Complete, true
+		return q.Dialogue.Complete, q.ID, true
 	}
-	return "", false
+	return "", "", false
 }
 
 // QuestInfo resolves QUEST <npc>: npc.Quest is the giver back-pointer (world
 // data, checked by Validate), so the lookup is direct. The first call for a
 // given quest accepts it on the spot — D10 has no separate accept step — and
-// grants q.Grants, if any, straight into the inventory. ok is false if npc
+// grants q.Grants, if any, straight into the inventory; justAccepted reports
+// that first-contact case, for the caller to log (D17). ok is false if npc
 // offers no quest, or the player has already completed it (406, D10).
-func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description, status string, ok bool) {
+func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description, status string, justAccepted, ok bool) {
 	if npc.Quest == "" {
-		return nil, "", "", false
+		return nil, "", "", false, false
 	}
 	q = h.world.Quests[npc.Quest]
 
@@ -77,15 +72,15 @@ func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description,
 	defer h.mu.Unlock()
 	switch c.quests[q.ID] {
 	case protocol.QuestCompleted:
-		return nil, "", "", false
+		return nil, "", "", false, false
 	case protocol.QuestActive:
-		return q, q.Dialogue.Active, protocol.QuestActive, true
+		return q, q.Dialogue.Active, protocol.QuestActive, false, true
 	default:
 		c.quests[q.ID] = protocol.QuestActive
 		if q.Grants != "" {
 			h.grantOnceLocked(c, q.Grants)
 		}
-		return q, q.Dialogue.Offer, protocol.QuestActive, true
+		return q, q.Dialogue.Offer, protocol.QuestActive, true, true
 	}
 }
 

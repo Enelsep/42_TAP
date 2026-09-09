@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -25,6 +26,11 @@ type Client struct {
 	// / protocol.QuestCompleted): a quest a player has never accepted is simply
 	// absent, which is what D10 calls the implicit "available" state.
 	quests map[string]string
+
+	hp        int  // current HP; see PlayerMaxHP/RespawnHP in combat.go (D15)
+	defending bool // DEFEND armed: halves the damage of the next hit taken
+
+	rate commandRate // flood tracking (D17); touched only by this client's reader goroutine
 }
 
 func newClient(conn net.Conn) *Client {
@@ -33,15 +39,46 @@ func newClient(conn net.Conn) *Client {
 		out:       make(chan string, 64),
 		inventory: map[string]bool{},
 		quests:    map[string]string{},
+		hp:        PlayerMaxHP,
 	}
 }
 
 // send enqueues line without blocking. If the client's buffer is full, the
 // line is dropped rather than stalling whoever is broadcasting.
 func (c *Client) send(line string) {
+	logReply(c.name, line)
 	select {
 	case c.out <- line:
 	default:
+	}
+}
+
+// maxLoggedReplyData caps how much of an OK reply's data logReply embeds
+// verbatim. LOOK's room JSON alone can run past this on a room with a full
+// item/NPC list, and logging it whole on every LOOK drowns a log tail in
+// room dumps instead of the player actions D17 actually wants visible.
+const maxLoggedReplyData = 200
+
+// logReply logs the OK/ERR outcome of one reply, the moment it is handed to
+// send — every handler's outcome ends up here without threading a logger
+// through all of them (D17). Every broadcast helper (Broadcast, BroadcastRoom,
+// BroadcastGroup, SendTo) also funnels through send, but an EVT line matches
+// neither prefix and is skipped: it is a notification about someone else's
+// action, not a reply to this client's own command, and logging it here
+// would misattribute it.
+func logReply(player, line string) {
+	head, rest, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+	switch head {
+	case "OK":
+		if len(rest) > maxLoggedReplyData {
+			slog.Info("reply", "player", player, "status", "ok",
+				"data", rest[:maxLoggedReplyData]+"…(truncated)", "data_len", len(rest))
+		} else {
+			slog.Info("reply", "player", player, "status", "ok", "data", rest)
+		}
+	case "ERR":
+		code, symbol, _ := strings.Cut(rest, " ")
+		slog.Info("reply", "player", player, "status", "err", "code", code, "symbol", symbol)
 	}
 }
 
@@ -67,6 +104,7 @@ type Hub struct {
 	roomItems    map[string][]string           // room id -> item ids on the floor
 	npcTalk      map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
 	grantedItems map[string]bool               // quest grant/reward item ids already created once, see grantOnceLocked
+	npcHP        map[string]int                // npc id -> current hp, enemies only (D15); 0 = dead, gone for good
 	world        *world.World                  // read-only: item names for display-name resolution
 }
 
@@ -78,11 +116,17 @@ func NewHub(w *world.World) *Hub {
 		roomItems:    make(map[string][]string),
 		npcTalk:      make(map[string]int),
 		grantedItems: make(map[string]bool),
+		npcHP:        make(map[string]int),
 		world:        w,
 	}
 	for id, loc := range w.Locations {
 		if len(loc.Items) > 0 {
 			h.roomItems[id] = slices.Clone(loc.Items)
+		}
+	}
+	for id, npc := range w.NPCs {
+		if npc.Role == world.RoleEnemy {
+			h.npcHP[id] = npc.Stats.HP
 		}
 	}
 	return h
@@ -187,12 +231,18 @@ func (h *Hub) PlayersIn(room string) []string {
 	return players
 }
 
-// SetRoom moves c to room. Every write to c.room must go through here (never
-// c.room = ... directly) once c is registered, so a concurrent BroadcastRoom
-// or PlayersIn reading c.room under h.mu never races the write.
+// SetRoom moves c to room. Every write to c.room must go through setRoomLocked
+// (never c.room = ... directly) once c is registered, so a concurrent
+// BroadcastRoom or PlayersIn reading c.room under h.mu never races the write.
 func (h *Hub) SetRoom(c *Client, room string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.setRoomLocked(c, room)
+}
+
+// setRoomLocked is SetRoom's body, for callers (combat.go's respawn and
+// flee paths) that already hold h.mu and would deadlock calling SetRoom.
+func (h *Hub) setRoomLocked(c *Client, room string) {
 	c.room = room
 }
 
@@ -278,6 +328,14 @@ func (h *Hub) RoomItems(room string) []string {
 	items := slices.Clone(h.roomItems[room])
 	slices.Sort(items)
 	return items
+}
+
+// Holds reports whether c currently carries item — used by MOVE to check a
+// gated exit's Requires entry.
+func (h *Hub) Holds(c *Client, item string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return c.inventory[item]
 }
 
 // Inventory returns the canonical ids c is carrying, sorted.

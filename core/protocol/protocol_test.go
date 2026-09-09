@@ -32,6 +32,8 @@ func TestCommandRoundTrip(t *testing.T) {
 		{"STATUS", Command{Verb: VerbStatus}},
 		{"QUEST merchant", Command{Verb: VerbQuest, Arg: "merchant"}},
 		{"QUESTS", Command{Verb: VerbQuests}},
+		{"DEFEND", Command{Verb: VerbDefend}},
+		{"FLEE", Command{Verb: VerbFlee}},
 	}
 	for _, tc := range cases {
 		got, err := ParseCommand(tc.line)

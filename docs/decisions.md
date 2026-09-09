@@ -398,14 +398,230 @@ TALK between them need to show.
 
 ---
 
+## D15 — Combat design (RFC §6.1.1)
+
+§6.1.1 delegates turn management, damage, combat states and any extra
+commands to us. Below is the whole system, ratifying the roadmap's T3.7
+proposal.
+
+### No weapons, no regen — HP only moves down, except on respawn
+
+There is no weapon system: `data/world.json`'s items carry no damage field,
+so every player hits for the same flat `PlayerBaseDamage` (15), jittered
+±20% (`rollDamage`, at least 1). NPCs hit back for their own `stats.damage`,
+jittered the same way. `PlayerMaxHP` is 100; there is no HEAL command and no
+natural regen, so the only way back to full health is dying and respawning
+— and respawn lands at `RespawnHP` (50, per the roadmap), not full. A player
+who wins a fight stays wounded until their next death.
+
+### A turn is one ATTACK; the NPC counters synchronously, in the same call
+
+`ATTACK <npc>` resolves entirely inside one lock acquisition
+(`Hub.AttackNPC`): c's hit lands, and if the NPC survives it counters
+immediately, before the handler returns. There is no scheduler, no combat
+session that outlives a single request — the simplest thing that is still
+correctly "turn-based". `404 NPC_NOT_FOUND` if npc isn't there (including a
+dead one — see below), `405 NPC_NOT_HOSTILE` if its role isn't `enemy`.
+
+### Death: NPCs stay dead, players respawn
+
+An NPC reaching 0 HP is marked dead for good — no respawn, matching a MUD
+boss/mini-boss you only fight once. It stops appearing in LOOK, and TALK/
+QUEST/ATTACK all answer `404 NPC_NOT_FOUND` for it from then on, exactly as
+if it had never been there (`Hub.RoomNPC`/`NPCIn`, replacing the old
+world-only `resolveNPC`). Its `drops` fall onto the room's floor, and any
+`kill`-type quest targeting it completes for **every player currently
+holding it active** — not just whoever landed the blow. Shared credit avoids
+inventing a "who gets it in a group" rule for a quest system that otherwise
+has none. The kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone
+else in the room, excluding the attacker (D13's reasoning: their own
+`AttackReply` already carries `target_hp:0`) — without it, other players'
+only way to learn the NPC is gone was to LOOK again.
+
+A player reaching 0 HP respawns immediately, inside the same `AttackNPC`
+call: back to the start room at `RespawnHP`, DEFEND cleared. The handler
+then broadcasts the LEAVE/ENTER pair for the old and new rooms, the same
+shape `MOVE` already uses.
+
+### A same-tick race: two players finishing off the same NPC
+
+`AttackNPC` re-checks the NPC's HP as its very first statement, still
+holding the lock. If it is already 0 — killed by someone else between this
+handler's `NPCIn` lookup and this call — the method reports `ok=false` and
+the handler answers `404 NPC_NOT_FOUND`, exactly the reply c would have
+gotten had it asked one tick later. Without this check the second attacker
+would re-run the death branch: drops appended to the room a second time,
+breaking §8.1 uniqueness.
+
+### STATUS's three values, given there is no combat *session*
+
+`healthy` at max HP, `dead` (0 HP), `combat` otherwise. Because no combat
+state outlives a single ATTACK/FLEE call, there is no stored "currently
+fighting" flag to report — `combat` here means "wounded", not "engaged right
+now". `dead` is only ever seen inline, in the AttackReply of the exchange
+that caused it: respawn is synchronous, so a later STATUS call can never
+observe 0 HP.
+
+### Gated exits actually check the item now
+
+A gap left over from before TAKE/DROP existed (T3.3's `handleMove` always
+answered `301 NO_EXIT` on a gated direction, no matter what the player
+carried) is closed as part of this pass: `Hub.Holds` checks the required
+item, and only a player without it is turned away. The `door` → `bossroom`
+exit — the whole reason the hunter drops a `key` — was unreachable until
+this fixed.
+
+**Where.** `core/server/combat.go`; `Hub.Holds` in `core/server/hub.go`;
+`handleAttack`/`handleStatus`/`handleMove` in `core/server/server.go`.
+
+---
+
+## D16 — DEFEND and FLEE: non-RFC, server-side only
+
+**Decision.** Two extra commands, on top of the RFC's fixed command table
+(§2.3), exist only because §6.1.1 explicitly leaves "extra commands" open
+and the roadmap commits to exactly these two: `DEFEND` (no argument →
+bare `OK`) arms a one-shot flag that halves the damage of c's *next*
+counter-attack, from ATTACK or FLEE, whichever comes first. `FLEE` (no
+argument → `OK <FleeReply JSON>`: `room`, `hp`, `damage`, `status`) forces a
+move through a random exit c could otherwise walk through normally (a gated
+one without the item is never picked), taking one unavoidable hit from any
+live enemy in the room on the way out — `damage`/`hp`/`status` report that
+hit the same way `AttackReply` reports one from ATTACK, so a fled-from fight
+isn't the one combat outcome invisible on the wire; `damage` is `0` and
+`status` is c's unchanged status when no enemy shared the room to land one.
+
+Neither has a notion of "which fight" it belongs to, because nothing in this
+design does (D15): DEFEND's flag is armed until consumed by whatever hits c
+next, even in an unrelated room; FLEE's free hit comes from whatever enemy
+happens to share c's current room, not from "the NPC c was just fighting"
+specifically. This is the simplest reading that needs no new state beyond a
+single bool.
+
+**Rationale — why adding verbs at all is safe.** §2.6's interoperability
+rule says extra commands are a liability *if a peer needs them to
+function*. Ours don't: a client that never sends DEFEND/FLEE plays a
+strictly harder game (every counter-attack lands full, no free escape) but
+never breaks a rule the RFC defines. Our own clients only send them by
+choice; another group's client will simply never emit `DEFEND`/`FLEE` in
+the first place, so their server never has to know these verbs exist. The
+two are added as ordinary `protocol.Verb` values (parsed and formatted like
+any other), not smuggled through `Command.Arg` — round-trip tests cover them
+exactly like RFC verbs, which is what makes them easy to reason about
+despite not being in the spec.
+
+**Where.** `protocol.VerbDefend`, `protocol.VerbFlee`, `protocol.FleeReply`;
+`Hub.Defend`, `Hub.Flee` in `core/server/combat.go`; `handleDefend`,
+`handleFlee` in `core/server/server.go`.
+
+---
+
+## D17 — Structured logging with `log/slog`, and abuse monitoring (§9.4)
+
+**Decision.** `slog.SetDefault` is set once, in `main`, to a
+`slog.NewJSONHandler(os.Stdout, nil)` — every package under `core/server`
+then just calls the package-level `slog.Info`/`slog.Warn`/`slog.Error`, no
+logger threaded through any constructor. That single line buys the subject's
+whole logging checklist for zero dependencies: JSON output, leveled records,
+and a timestamp on every line, for free from the handler.
+
+### Replies are logged at one choke point, not in every handler
+
+`Client.send` (`hub.go`) is the only function every reply and every
+broadcast passes through — 15+ call sites across `server.go`, plus the
+`Hub`'s own `Broadcast`/`BroadcastRoom`/`BroadcastGroup`/`SendTo` helpers.
+`logReply` hooks there: it reads the line's first token and logs `OK`
+(`status=ok`, the rest of the line as `data`) or `ERR` (`status=err`,
+`code`, `symbol`); anything else — every `EVT` line — is skipped, since a
+broadcast is a notification about someone else's action, not a reply to
+*this* client's command, and logging it here would misattribute it. `data`
+is capped at `maxLoggedReplyData` (200 bytes, `data_len` added when it
+truncates): LOOK's room JSON can run well past that on a room with a full
+item/NPC list, and logging it whole on every LOOK buries the commands a
+human tailing the log actually cares about under repeated room dumps.
+
+**Rationale.** The alternative was adding an explicit log call to every one
+of the ~15 handlers, each producing its own reply. Hooking the single choke
+point instead means no handler can forget to log its outcome, at the cost of
+`hub.go` — otherwise free of any protocol-wire-format knowledge — sniffing
+a line's leading token. That's a real layering blur, accepted deliberately:
+the alternative's blast radius (touch every handler, twice, for the rest of
+the project) was worse than this one function knowing `"OK"` and `"ERR"`
+are the two prefixes that matter.
+
+### What else is logged, and at what level
+
+- **Info** (the default, everything routine): TCP connect/disconnect
+  (`+remote`), every parsed command (`+player, verb, scope, sub, arg`),
+  every OK/ERR reply (above), world-state changes (MOVE already implied by
+  its `room=` reply data; TAKE/DROP explicitly, since nothing logged them
+  before), quest events (`quest accepted`, `quest completed`), and combat
+  events (`npc killed`, `player respawned`).
+- **Warn**: exclusively the two abuse signals below, plus one defensive
+  case — a `Verb` reaching the dispatch switch's `default` arm, which
+  should be unreachable (`ParseCommand` only ever returns a `Verb` with a
+  matching `case`) but would mean a future verb was added to `protocol.go`
+  without a handler wired up here.
+- **Error**: a JSON marshal failure on an outgoing payload (should never
+  happen with these fixed struct shapes; if it does, that is a bug, not a
+  player action) and unrecoverable startup failures (bad world file, listen
+  failure) — `main.go` logs and `os.Exit(1)`s in place of the old
+  `log.Fatalf`, since `slog` has no `Fatal` level of its own.
+
+Ordinary `ERR` replies — walking into a wall, attacking a corpse — are
+**not** Warn. They are normal gameplay outcomes a player triggers directly,
+already fully captured (`status=err`, `code`, `symbol`) at Info. Warn is
+reserved for the two conditions the subject explicitly calls "abuse",
+below, so that grepping a log for `"level":"WARN"` means something specific
+instead of drowning in routine 404s.
+
+### Abuse monitoring (RFC §9.4, SHOULD): counting and logging only
+
+Two independent, mutex-appropriate trackers, both in `abuse.go`:
+
+- **Flood**: `commandRate`, one per `Client`, holds a sliding window of
+  that connection's recent command timestamps. `hit` trims anything older
+  than 2 seconds, appends now, and reports true only on the exact tick the
+  count reaches 20 — so a sustained flood logs one `WARN abuse=flood`, not
+  one per command for as long as it lasts. It lives on the `Client` and is
+  touched only by that connection's own reader goroutine (the same one that
+  already owns `bufio.Scanner`), so — unlike everything in `hub.go` — it
+  needs no lock.
+- **Reconnect**: `reconnectTracker`, one per `Server`, keyed by the remote
+  address's host (port stripped via `net.SplitHostPort`) with the same
+  sliding-window/crossing-tick logic: 3 connections from one host within 10
+  seconds logs one `WARN abuse=reconnect`. Unlike flood tracking, this state
+  outlives any single `Client` — a reconnect is by definition a *new*
+  socket — so it belongs to the `Server` and is mutex-guarded, since every
+  connection's goroutine calls `hit` concurrently in `handleConn`.
+
+**Why counting and logging only, never banning.** The subject and RFC §9.4
+both frame this as monitoring ("SHOULD" track, nothing stronger), and nothing
+in the RFC's command or error tables defines a way to reject a connection
+for rate alone — inventing one would mean either silently dropping packets
+(§9.3 wants a response to malformed input, and dropping a *connection*
+outright is worse) or a wire-visible ban with no RFC error code for it, the
+same objection D5 raised for `NOT_CONNECTED`/`BAD_REQUEST`, but for a far
+riskier feature: a false positive here (a legitimate burst of `LOOK`s while
+sight-reading a new room) would eject a paying — well, playing — customer
+mid-session. Counting and logging costs nothing and gives a human everything
+they need to act; the roadmap's own thresholds (`>20 cmds/2s`, rapid
+reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
+
+**Where.** `core/server/abuse.go`; the `hit` calls in `server.go`'s
+`handleConn`; `slog.SetDefault` in `core/cmd/server/main.go`.
+
+---
+
 ## Still open
 
-- **Combat** (§6.1.1) — turn management, damage formula, DEFEND/FLEE, respawn
-  rules. Proposal in roadmap T3.7, to be ratified when the server's combat path
-  is written.
-- **The `boss` room** — name, description and its NPC are still placeholders in
-  `data/world.json`; it is the only room the key unlocks, so it is what the
-  hunter contract ultimately pays for.
+- **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
+  name, dialogue and stats, but `bossroom` carries no `spawns` entry pointing
+  at it, so nothing is actually there to ATTACK yet (confirmed live while
+  testing D15/D16: the door opens with the key exactly as designed, the room
+  is just empty). `bossroom`'s own name and description are placeholders too.
+  It is the only room the key unlocks, so it is what the hunter contract
+  ultimately pays for.
 - **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
   roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
