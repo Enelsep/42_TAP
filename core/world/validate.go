@@ -5,7 +5,19 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
+	"unicode"
 )
+
+// hasControlChar reports whether s contains a control character — most
+// importantly \n or \r. TALK and quest-completion replies send NPC/quest
+// dialogue as raw text, not JSON (json.Marshal already escapes these for
+// every other field), so an embedded newline in world data would let it
+// forge extra protocol lines on the wire — the RFC §9.2 handling issue
+// reachable only through this one path.
+func hasControlChar(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
 
 // Validate reports every structural problem in a loaded world at once, so a
 // broken world file is fixed in one pass rather than one server start per typo.
@@ -20,6 +32,12 @@ func (w *World) Validate() error {
 		l := w.Locations[id]
 		if l.Name == "" {
 			bad("%s: no name", id)
+		}
+		if hasControlChar(l.Name) {
+			bad("%s: name contains a control character", id)
+		}
+		if hasControlChar(l.Description) {
+			bad("%s: description contains a control character", id)
 		}
 		if len(l.Exits) == 0 {
 			bad("%s: no exits, players would be stuck there", id)
@@ -55,8 +73,29 @@ func (w *World) Validate() error {
 		}
 	}
 
+	for _, id := range slices.Sorted(maps.Keys(w.Items)) {
+		item := w.Items[id]
+		if hasControlChar(item.Name) {
+			bad("%s: name contains a control character", id)
+		}
+		if hasControlChar(item.Description) {
+			bad("%s: description contains a control character", id)
+		}
+	}
+
 	for _, id := range slices.Sorted(maps.Keys(w.NPCs)) {
 		npc := w.NPCs[id]
+		if hasControlChar(npc.Name) {
+			bad("%s: name contains a control character", id)
+		}
+		if hasControlChar(npc.Description) {
+			bad("%s: description contains a control character", id)
+		}
+		for i, line := range npc.Dialogue {
+			if hasControlChar(line) {
+				bad("%s: dialogue line %d contains a control character", id, i)
+			}
+		}
 		switch npc.Role {
 		case RoleDialogue, RoleQuestGiver:
 		case RoleEnemy:
@@ -86,6 +125,16 @@ func (w *World) Validate() error {
 
 	for _, id := range slices.Sorted(maps.Keys(w.Quests)) {
 		q := w.Quests[id]
+		if hasControlChar(q.Name) {
+			bad("quest %s: name contains a control character", id)
+		}
+		for label, line := range map[string]string{
+			"offer": q.Dialogue.Offer, "active": q.Dialogue.Active, "complete": q.Dialogue.Complete,
+		} {
+			if hasControlChar(line) {
+				bad("quest %s: %s dialogue contains a control character", id, label)
+			}
+		}
 		giver := w.NPCs[q.Giver]
 		switch {
 		case giver == nil:

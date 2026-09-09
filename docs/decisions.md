@@ -255,9 +255,19 @@ RFC does not define.
 
 ### Rewards, and why the key is a drop rather than a reward
 
-Rewards are item instances created into the player's inventory on completion —
-`crysknife` for the delivery, `water` for the contract. Neither exists anywhere
-else in the world, so uniqueness (§8.1) holds by construction.
+Rewards are item instances created into the player's inventory on
+completion — `crysknife` for the delivery, `water` for the contract.
+Neither exists anywhere else in the *static* world, but "holds by
+construction" was single-player reasoning: two players independently
+finishing the same quest — or, for a `kill` quest, two holding it active
+when the target dies — each triggered their own creation, so the same
+canonical id existed twice at once, exactly what `checkItemSources`
+rejects for the static data. `Hub.grantOnceLocked` now gates every dynamic
+creation (`grants` and `reward` alike) so the id is created once, on
+whichever call reaches it first; later completions still update that
+player's own quest state, matching the kill quest's shared-credit design
+below, they just don't manifest a second copy of an item this world treats
+as a singleton.
 
 The hunter's `key` is deliberately **not** the kill quest's reward. It is an NPC
 `drops` entry: on death the key falls into the room. If it were the reward, a

@@ -55,7 +55,7 @@ func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line string, ok bool)
 			continue
 		}
 		delete(c.inventory, q.Grants)
-		c.inventory[q.Reward] = true
+		h.grantOnceLocked(c, q.Reward)
 		c.quests[q.ID] = protocol.QuestCompleted
 		return q.Dialogue.Complete, true
 	}
@@ -83,7 +83,7 @@ func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description,
 	default:
 		c.quests[q.ID] = protocol.QuestActive
 		if q.Grants != "" {
-			c.inventory[q.Grants] = true
+			h.grantOnceLocked(c, q.Grants)
 		}
 		return q, q.Dialogue.Offer, protocol.QuestActive, true
 	}
