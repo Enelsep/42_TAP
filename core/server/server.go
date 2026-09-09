@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"strconv"
@@ -184,11 +185,15 @@ func (s *Server) handleConn(conn net.Conn) {
 			c.send(protocol.FormatOK(""))
 		}
 	}
-	if scanner.Err() != nil {
-		// The only way Scan can fail here (net.Conn read errors aside) is a
-		// line past the buffer above — reply once before the deferred
+	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
+		// A line past the buffer above — reply once before the deferred
 		// cleanup closes the connection, so this is a rejection (§9.3), not
 		// an unexplained drop indistinguishable from the network dying.
+		// Every *other* Scan failure is an actual network error (a plain
+		// disconnect, or the abrupt RST T4.2 fires at a client mid-broadcast)
+		// — those get no reply, same as before this check existed, since
+		// there is nothing here to reject and the connection is already
+		// gone in every sense that matters.
 		c.send(protocol.FormatErr(protocol.ErrBadRequest))
 	}
 }

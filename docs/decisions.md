@@ -638,8 +638,16 @@ fixed cost) — any line long enough for `ParseCommand`'s own check to reject
 now reaches it and gets a normal `400 BAD_REQUEST`. A line that still
 overflows *that* buffer is far enough outside anything a real client would
 ever send that giving up on the connection is fine — but `handleConn` now
-checks `scanner.Err()` after the loop and sends one `400 BAD_REQUEST` first,
-so even that case is a rejection, not an unexplained drop.
+checks `errors.Is(scanner.Err(), bufio.ErrTooLong)` after the loop and sends
+one `400 BAD_REQUEST` first, so even that case is a rejection, not an
+unexplained drop. The check is specifically `ErrTooLong`, not a bare
+`scanner.Err() != nil`: the first version of this fix treated *any* Scan
+failure as a malformed line, so an abrupt disconnect (a real network drop,
+or T4.2's `kill -9`-style RST) also tried sending a reply — harmless against
+an already-dead connection, but a misleading `BAD_REQUEST` in the logs for
+what was never a malformed request. T4.2's disconnect-torture test is what
+surfaced this: killing clients mid-broadcast produced exactly that spurious
+log line every time.
 
 **Where.** `core/server/server.go`'s `handleConn`.
 
