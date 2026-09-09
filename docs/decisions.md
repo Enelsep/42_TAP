@@ -645,6 +645,87 @@ arrived, so a plain queue never needs to correlate by content — T6.1's GUI
 backend pairs replies the same way, for the same reason.
 
 **Where.** `core/cmd/cli/translate.go`, `render.go`, `ansi.go`, `main.go`.
+## D18 — Malformed-input gauntlet (T4.1): results and control-character policy
+
+**What the gauntlet covers.** Unknown verbs, missing arguments, binary junk
+as a verb, commands before CONNECT, double CONNECT, `TAKE`/`GROUP JOIN`
+against nonexistent targets, a line over `MaxLineLen`, TCP fragmentation and
+coalescing — each is now a regression test in `core/server/gauntlet_test.go`,
+run against one real server instance over real TCP, not mocked. All but one
+already behaved correctly; that one is below.
+
+### Bug found: a line past `bufio.Scanner`'s own buffer dropped silently
+
+`ParseCommand` has rejected anything over `MaxLineLen` (1024) since D5, but
+that check only runs on a line the *scanner* already produced. Scanner's
+default token buffer is 64KB — past that, `Scan` returns `false` with
+`ErrTooLong`, indistinguishable from the client just closing the connection,
+so the read loop exited straight into cleanup with **no reply at all**. That
+violates §9.3 ("malformed messages SHOULD result in appropriate error
+responses") for a case D5 was never actually exercised against.
+
+**Fix.** `handleConn`'s scanner now takes an explicit buffer just past
+`MaxLineLen` (`2×MaxLineLen`, headroom against off-by-one, still a trivial
+fixed cost) — any line long enough for `ParseCommand`'s own check to reject
+now reaches it and gets a normal `400 BAD_REQUEST`. A line that still
+overflows *that* buffer is far enough outside anything a real client would
+ever send that giving up on the connection is fine — but `handleConn` now
+checks `errors.Is(scanner.Err(), bufio.ErrTooLong)` after the loop and sends
+one `400 BAD_REQUEST` first, so even that case is a rejection, not an
+unexplained drop. The check is specifically `ErrTooLong`, not a bare
+`scanner.Err() != nil`: the first version of this fix treated *any* Scan
+failure as a malformed line, so an abrupt disconnect (a real network drop,
+or T4.2's `kill -9`-style RST) also tried sending a reply — harmless against
+an already-dead connection, but a misleading `BAD_REQUEST` in the logs for
+what was never a malformed request. T4.2's disconnect-torture test is what
+surfaced this: killing clients mid-broadcast produced exactly that spurious
+log line every time.
+
+**Where.** `core/server/server.go`'s `handleConn`.
+
+### Control characters (§9.2: "handle or reject them") — decided per input
+
+§9.2 leaves the choice to us. The two places client input reaches another
+client's screen raw (not JSON, which already escapes this) don't share the
+same risk:
+
+- **A raw `\n`/`\r` forging an extra wire line — impossible for client
+  input.** The transport is itself line-delimited on `\n`, so nothing a
+  client sends within one command can *contain* a raw newline; that risk is
+  unique to data loaded from a file (D10's `hasControlChar` in
+  `world/validate.go`), not to anything arriving over the socket.
+- **A control character riding along in an echoed value is still possible,
+  and usernames are the one place it matters.** `CONNECT`'s argument is
+  echoed raw in every `PRESENCE`/`GROUP`/`CHAT` event for the rest of that
+  session — a terminal escape sequence in it lands in every other player's
+  raw-printing T5.1 CLI, repeatedly, for as long as the name is in use.
+  **Decision: reject.** `ParseCommand`'s `CONNECT` case now also rejects a
+  control character in the username, the same 400 it already gives an empty
+  or space-containing one (`protocol.hasControlChar`, mirroring `world`'s
+  but kept separate — `protocol` importing `world` for one helper would be
+  a real layering violation for no shared state).
+- **`CHAT`'s message is the other raw-echoed value, and it's accepted
+  as-is.** It's genuinely free text by RFC design (§5.2.1's example puts no
+  restriction on it), one-shot rather than persistent like a username, and
+  rejecting bytes we can't fully anticipate risks breaking a peer's client
+  sending something legitimate we didn't think of. A hostile escape
+  sequence here is a rendering concern for whichever client chooses to
+  print it raw — T5.2's translating CLI layer is the right place to sanitize
+  on display, not the server.
+
+### Everything else, confirmed correct as-is
+
+Double `CONNECT` on an already-authenticated connection reuses `201
+NAME_IN_USE` — no RFC code covers "you're already connected", and this was
+already the behavior (`handleConnect`'s `c.name != ""` guard existed before
+T4.1); the gauntlet just confirms it also leaves the *first* identity's
+state untouched. Fragmentation and coalescing both fall out of
+`bufio.Scanner` for free, exactly as D1's rationale expected — the gauntlet
+proves it rather than assuming it. `TAKE`/`GROUP JOIN` against ids that
+don't exist already answered `404`/`404 GROUP_NOT_FOUND` correctly (D12).
+
+**Where.** `core/server/gauntlet_test.go`; `protocol.hasControlChar`,
+`ParseCommand`'s `VerbConnect` case.
 
 ---
 
@@ -659,3 +740,5 @@ backend pairs replies the same way, for the same reason.
   ultimately pays for.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
   during T4.1's malformed-input gauntlet.
+- **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
+  roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
