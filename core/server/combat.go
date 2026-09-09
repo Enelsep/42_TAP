@@ -109,7 +109,9 @@ func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, 
 
 	if hp == 0 {
 		h.killNPCLocked(c.room, npc)
-		return protocol.AttackReply{AttackerHP: c.hp, TargetHP: 0, Damage: dmg, Status: protocol.StatusHealthy}, true, false, true
+		// c never took a counter on this branch, but c.hp may already be
+		// below max from an earlier fight — killing the NPC doesn't heal it.
+		return protocol.AttackReply{AttackerHP: c.hp, TargetHP: 0, Damage: dmg, Status: statusFor(c.hp)}, true, false, true
 	}
 
 	counter := rollDamage(npc.Stats.Damage)
