@@ -96,6 +96,10 @@
                 "description": "You realize the twin-suns were never stars. It is the eyes of...something",
                 "exits": {
                     "south": "door"
+                },
+                "spawns": {
+                    "npc_type": "boss",
+                    "count": 1
                 }
             },
             "suburbs": {
