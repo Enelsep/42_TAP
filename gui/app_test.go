@@ -131,3 +131,61 @@ func TestLocalValidation(t *testing.T) {
 		t.Error("Connect to a dead port must fail")
 	}
 }
+
+// Combat over a real server: DEFEND and FLEE are this server's extensions, so
+// this is the only place their bindings get exercised end to end.
+func TestCombatRound(t *testing.T) {
+	addr := startServer(t)
+	a := NewApp()
+	if err := a.Connect(addr, "fighter"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer a.Disconnect()
+
+	// start -> city -> square -> camp -> nest, where the hunter lives.
+	for _, dir := range []string{"east", "east", "north", "north"} {
+		if _, err := a.Move(dir); err != nil {
+			t.Fatalf("Move %s: %v", dir, err)
+		}
+	}
+	look, err := a.Look()
+	if err != nil {
+		t.Fatalf("Look: %v", err)
+	}
+	if len(look.NPCs) == 0 {
+		t.Fatalf("expected an npc in %s, got %v", look.Room.ID, look.NPCs)
+	}
+	target := look.NPCs[0]
+
+	hit, err := a.Attack(target)
+	if err != nil {
+		t.Fatalf("Attack: %v", err)
+	}
+	if hit.Damage <= 0 || hit.TargetHP < 0 {
+		t.Errorf("AttackReply = %+v", hit)
+	}
+
+	if err := a.Defend(); err != nil {
+		t.Fatalf("Defend: %v", err)
+	}
+
+	fled, err := a.Flee()
+	if err != nil {
+		t.Fatalf("Flee: %v", err)
+	}
+	if fled.Room == "" || fled.HP <= 0 {
+		t.Errorf("FleeReply = %+v", fled)
+	}
+	if fled.Room == look.Room.ID {
+		t.Errorf("fleeing left us in %s", fled.Room)
+	}
+
+	// Fleeing is a move: the room we land in is what LOOK must report.
+	after, err := a.Look()
+	if err != nil {
+		t.Fatalf("Look after flee: %v", err)
+	}
+	if after.Room.ID != fled.Room {
+		t.Errorf("fled to %s but LOOK says %s", fled.Room, after.Room.ID)
+	}
+}

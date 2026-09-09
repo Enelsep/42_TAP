@@ -18,6 +18,24 @@ export namespace protocol {
 	        this.status = source["status"];
 	    }
 	}
+	export class FleeReply {
+	    room: string;
+	    hp: number;
+	    damage: number;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleeReply(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.room = source["room"];
+	        this.hp = source["hp"];
+	        this.damage = source["damage"];
+	        this.status = source["status"];
+	    }
+	}
 	export class Room {
 	    id: string;
 	    name: string;

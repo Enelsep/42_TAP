@@ -18,12 +18,20 @@ export function Connected() {
   return window['go']['main']['App']['Connected']();
 }
 
+export function Defend() {
+  return window['go']['main']['App']['Defend']();
+}
+
 export function Disconnect() {
   return window['go']['main']['App']['Disconnect']();
 }
 
 export function Drop(arg1) {
   return window['go']['main']['App']['Drop'](arg1);
+}
+
+export function Flee() {
+  return window['go']['main']['App']['Flee']();
 }
 
 export function GroupCreate() {

@@ -121,7 +121,29 @@
             </div>
         </div>
 
-        <div id="toasts"></div>
+        <!-- combat: stays open so blows can be traded without reopening a picker -->
+    <div class="overlay" hidden id="combat">
+        <div class="card">
+            <h2 id="combat-title"></h2>
+            <p class="combat-line" id="combat-status"></p>
+            <div class="combat-actions">
+                <button class="primary" id="btn-attack">Attack</button>
+                <button id="btn-defend">Defend</button>
+                <button id="btn-flee">Flee</button>
+            </div>
+            <button class="ghost" id="combat-close" type="button">disengage</button>
+        </div>
+    </div>
+
+    <div class="overlay" hidden id="quests">
+        <div class="card">
+            <h2>Quests</h2>
+            <ul class="quest-list" id="quest-list"></ul>
+            <button class="ghost" id="quests-close" type="button">close</button>
+        </div>
+    </div>
+
+    <div id="toasts"></div>
     </div>
     <script src="./src/main.js" type="module"></script>
 </body>

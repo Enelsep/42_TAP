@@ -1,7 +1,7 @@
 import './style.css';
 
 import {
-    Attack, Chat, Connect, Disconnect, Drop, GroupCreate, GroupInvite, GroupJoin,
+    Attack, Chat, Connect, Defend, Disconnect, Drop, Flee, GroupCreate, GroupInvite, GroupJoin,
     GroupLeave, Inventory, Look, Move, Quest, Quests, Status, Take, Talk, Who,
 } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
@@ -65,6 +65,7 @@ const state = {
     npcs: [],
     inventory: [],
     roomNames: {}, // room id -> display name, learned by visiting
+    questGivers: {}, // quest id -> giver name, learned by asking
     chat: { ROOM: [], GLOBAL: [], GROUP: [] },
     scope: 'ROOM',
     backdrop: null,
@@ -441,34 +442,122 @@ async function dropItem(id) {
 
 async function talkTo(id) {
     const said = await guard(() => Talk(id));
-    if (said.ok) logLine(`${pretty(id)}: ${said.value}`);
+    if (!said.ok) return;
+    logLine(`${pretty(id)}: ${said.value}`);
+    // Talking to a delivery target completes the quest server-side: the
+    // carried item is consumed and the reward granted, and neither shows up
+    // until we ask again.
+    await Promise.all([refreshInventory(), refreshRoom()]);
 }
 
 async function attack(id) {
     const hit = await guard(() => Attack(id));
-    if (!hit.ok) return;
+    if (!hit.ok) {
+        closeCombat();
+        return;
+    }
     const { attacker_hp, target_hp, damage, status } = hit.value;
-    logLine(`hit ${pretty(id)} for ${damage} — it has ${target_hp} hp, you have ${attacker_hp} (${status})`);
+    const line = `hit ${pretty(id)} for ${damage} — it has ${target_hp} hp, you have ${attacker_hp} (${status})`;
+    logLine(line);
+    combatSay(line);
     renderHealth({ hp: attacker_hp, max_hp: 100 });
-    await refreshRoom();
+
+    // A kill drops loot and can complete a kill quest, which grants a reward.
+    await Promise.all([refreshRoom(), refreshInventory()]);
+
+    // Covers every way the fight can end at once: the NPC died, or we did and
+    // respawned somewhere else. Either way the target is no longer in reach.
+    if (!state.npcs.includes(id)) closeCombat();
+}
+
+async function defend() {
+    if (!(await guard(Defend)).ok) return;
+    logLine('bracing for the next hit');
+    combatSay('braced — the next hit lands for half');
+}
+
+async function flee() {
+    const fled = await guard(Flee);
+    if (!fled.ok) return;
+    const { room, hp, damage, status } = fled.value;
+    logLine(`fled to ${state.roomNames[room] || pretty(room)} — took ${damage}, ${hp} hp left (${status})`);
+    renderHealth({ hp, max_hp: 100 });
+    closeCombat();
+    await Promise.all([refreshRoom(), refreshInventory()]);
+}
+
+// --- combat window ---
+
+let combatTarget = null;
+
+const combatSay = (text) => { $('combat-status').textContent = text; };
+
+function openCombat(id) {
+    combatTarget = id;
+    $('combat-title').textContent = `Fighting ${pretty(id)}`;
+    combatSay('');
+    $('combat').hidden = false;
+}
+
+function closeCombat() {
+    combatTarget = null;
+    $('combat').hidden = true;
 }
 
 async function askQuest(id) {
     const quest = await guard(() => Quest(id));
-    if (quest.ok) logLine(`${pretty(id)} offers ${quest.value.quest_id} (${quest.value.status}): ${quest.value.description}`);
+    if (!quest.ok) return;
+    const q = quest.value;
+    state.questGivers[q.quest_id] = pretty(id); // the only place the giver is known
+    logLine(`${pretty(id)}: ${q.description}`);
+    logLine(`quest ${pretty(q.quest_id)} — ${QUEST_LABELS[q.status] || q.status}, reward ${pretty(q.reward)}`);
+    await refreshInventory(); // accepting can grant the quest item on the spot
 }
+
+// Protocol statuses, in the player's words. "available" never arrives from our
+// own server — asking for a quest accepts it on the spot (D10) — but a peer's
+// server may report it, so the panel renders all three.
+const QUEST_LABELS = { available: 'offer', active: 'active', completed: 'complete' };
 
 async function listQuests() {
     const quests = await guard(Quests);
     if (!quests.ok) return;
+
+    const list = $('quest-list');
+    list.replaceChildren();
     const entries = quests.value || [];
+
     if (!entries.length) {
-        logLine('no quests yet');
-        return;
+        const li = document.createElement('li');
+        li.className = 'empty';
+        li.textContent = 'no quests yet — ask an NPC for one';
+        list.append(li);
     }
+
     for (const q of entries) {
-        logLine(`quest ${q.quest_id}: ${q.status}${q.progress ? ` (${q.progress})` : ''}`);
+        const text = document.createElement('div');
+        const name = document.createElement('span');
+        name.className = 'quest-name';
+        name.textContent = pretty(q.quest_id);
+        text.append(name);
+
+        const giver = state.questGivers[q.quest_id];
+        if (giver) {
+            const from = document.createElement('span');
+            from.className = 'quest-from';
+            from.textContent = `from ${giver}`;
+            text.append(from);
+        }
+
+        const badge = document.createElement('span');
+        badge.className = `quest-status ${q.status}`;
+        badge.textContent = (QUEST_LABELS[q.status] || q.status) + (q.progress ? ` ${q.progress}` : '');
+
+        const li = document.createElement('li');
+        li.append(text, badge);
+        list.append(li);
     }
+    $('quests').hidden = false;
 }
 
 async function groupMenu() {
@@ -526,7 +615,7 @@ const ACTIONS = {
     },
     ATTACK: async () => {
         const id = await pick('Attack whom?', asChoices(state.npcs), 'npc name or id');
-        if (id) await attack(id);
+        if (id) openCombat(id);
     },
     QUEST: async () => {
         const id = await pick('Ask whom for a quest?', asChoices(state.npcs), 'npc name or id');
@@ -555,6 +644,12 @@ EventsOn('tap:evt', (event) => {
     if (event.kind === 'PRESENCE') {
         logLine(`${event.player} ${event.presence === 'ENTER' ? 'arrives' : 'leaves'}`);
         refreshRoom();
+        return;
+    }
+    if (event.kind === 'NPC_DEATH') {
+        logLine(`${pretty(event.npc || 'something')} falls`);
+        refreshRoom();
+        refreshInventory(); // kill credit is shared, so a reward may have landed
         return;
     }
     if (event.scope === 'GROUP') {
@@ -640,6 +735,12 @@ for (const tab of $('chat-tabs').querySelectorAll('button')) {
         renderChat();
     };
 }
+
+$('btn-attack').onclick = () => combatTarget && attack(combatTarget);
+$('btn-defend').onclick = defend;
+$('btn-flee').onclick = flee;
+$('combat-close').onclick = closeCombat;
+$('quests-close').onclick = () => { $('quests').hidden = true; };
 
 $('chat-input').addEventListener('focus', () => $('chat').classList.remove('collapsed'));
 $('chat-input').addEventListener('blur', () => $('chat').classList.add('collapsed'));
