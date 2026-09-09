@@ -60,9 +60,17 @@ func main() {
 			line := scanner.Text()
 			if !*raw {
 				line = translateInput(line)
-				if cmd, err := protocol.ParseCommand(line); err == nil {
-					render.expect(cmd.Verb)
-				}
+				// The server replies to every line it reads, parsable or
+				// not (an unparsable one still gets ERR 400 BAD_REQUEST),
+				// so the pending queue must be pushed unconditionally too
+				// — skipping it here on a local parse failure leaves the
+				// queue one short and pairs every later reply with the
+				// wrong command. On failure cmd is the zero Command, whose
+				// empty Verb matches no case in render.reply's switch and
+				// falls back to raw, which is the correct rendering for a
+				// line that was never going to succeed anyway.
+				cmd, _ := protocol.ParseCommand(line)
+				render.expect(cmd.Verb)
 			}
 			if _, err := io.WriteString(conn, line+"\n"); err != nil {
 				return
