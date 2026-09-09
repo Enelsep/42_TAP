@@ -8,10 +8,12 @@ import { EventsOn } from '../wailsjs/runtime/runtime';
 
 import bar from './assets/images/bar.png';
 import boss from './assets/images/boss.png';
+import bossClear from './assets/images/boss_2.png';
 import camp from './assets/images/camp.png';
 import city from './assets/images/city.png';
 import door from './assets/images/door.png';
 import nest from './assets/images/nest.png';
+import nestClear from './assets/images/nest_2.png';
 import shop from './assets/images/shop.png';
 import square from './assets/images/square.png';
 import start from './assets/images/start.png';
@@ -36,6 +38,16 @@ const BACKDROPS = {
     'loc.bar': bar, 'loc.bossroom': boss, 'loc.camp': camp, 'loc.city': city,
     'loc.door': door, 'loc.nest': nest, 'loc.shop': shop, 'loc.square': square,
     'loc.start': start, 'loc.suburbs': suburbs,
+};
+
+// Same rooms, painted without their enemy. Used once that enemy is dead —
+// which the client reads off LOOK, since the server drops a killed enemy from
+// the room's npcs (D15). Only the two enemy rooms have a variant, and each
+// holds exactly one NPC, so "no npcs here" is the same statement as "the
+// enemy is dead"; a room with an enemy *and* a merchant would need the
+// enemy's id checked by name instead.
+const BACKDROPS_CLEARED = {
+    'loc.bossroom': bossClear, 'loc.nest': nestClear,
 };
 
 
@@ -260,11 +272,10 @@ function setMuted(next) {
 
 let showingA = false;
 
-function setBackdrop(roomID) {
-    if (state.backdrop === roomID) return;
-    const url = BACKDROPS[roomID];
-    if (!url) return;
-    state.backdrop = roomID;
+function setBackdrop(roomID, cleared) {
+    const url = (cleared && BACKDROPS_CLEARED[roomID]) || BACKDROPS[roomID];
+    if (!url || state.backdrop === url) return;
+    state.backdrop = url;
 
     const next = showingA ? $('bg-b') : $('bg-a');
     const current = showingA ? $('bg-a') : $('bg-b');
@@ -313,7 +324,7 @@ function renderRoom() {
     $('hud-room').textContent = room.name || '';
     $('room-desc').textContent = room.description || '';
     $('count-room').textContent = state.players.length;
-    setBackdrop(room.id);
+    setBackdrop(room.id, state.npcs.length === 0);
     playRoomMusic(room.id);
 
     listInto($('room-npcs'), state.npcs.map((id) => ({
@@ -843,7 +854,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Decode every backdrop up front so a move never flashes an empty frame.
-for (const url of Object.values(BACKDROPS)) {
+for (const url of [...Object.values(BACKDROPS), ...Object.values(BACKDROPS_CLEARED)]) {
     new Image().src = url;
 }
 
