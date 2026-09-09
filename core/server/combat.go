@@ -83,7 +83,7 @@ func (h *Hub) killNPCLocked(room string, npc *world.NPC) {
 		for _, client := range h.clients {
 			if client.quests[q.ID] == protocol.QuestActive {
 				client.quests[q.ID] = protocol.QuestCompleted
-				client.inventory[q.Reward] = true
+				h.grantOnceLocked(client, q.Reward)
 			}
 		}
 	}
