@@ -613,6 +613,41 @@ reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
 
 ---
 
+## D19 — CLI interface: the translating layer (T5.2)
+
+**Decision.** The subject offers a choice between a client that speaks only
+raw RFC syntax and one that translates a friendlier syntax onto it. We took
+the second: `translateInput` maps a handful of natural phrasings onto their
+RFC verb — `go north` → `MOVE north`, `say hi` → `CHAT ROOM hi`, `shout`/
+`gsay` the same for the other two `CHAT` scopes — and `renderer` turns
+replies and events back into readable text (JSON payloads formatted, ANSI
+color, no external library). Neither layer can make the RFC syntax stop
+working: every trigger word in `translateInput` is one no RFC verb uses, and
+its fallback is "return the line unchanged"; `renderer`'s fallback, for
+anything it doesn't specifically recognise, is "print the line as it
+arrived". `-raw` restores T5.1's original verbatim behavior entirely, for
+testing against the wire itself or against another group's server.
+
+**Rationale.** §2.6's interoperability rule is about the *wire*, not the
+keys someone types to produce it — a translation layer that degrades
+gracefully to raw RFC syntax for anything it doesn't understand costs
+nothing there, and reading combat/quest/room JSON as colored prose instead
+of a single line is a real usability win for the tool every other roadmap
+item gets tested through.
+
+**Pairing replies with the command that caused them.** A reply carries no
+verb of its own on the wire — `renderer.expect` records each command's verb
+in a small FIFO queue as it's sent, and the next non-`EVT` line pops the
+oldest one to know how to render it. This works because both directions of
+one TCP connection are strictly ordered: the server processes commands from
+one connection's read loop one at a time, replying in the order they
+arrived, so a plain queue never needs to correlate by content — T6.1's GUI
+backend pairs replies the same way, for the same reason.
+
+**Where.** `core/cmd/cli/translate.go`, `render.go`, `ansi.go`, `main.go`.
+
+---
+
 ## Still open
 
 - **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
@@ -622,7 +657,5 @@ reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
   is just empty). `bossroom`'s own name and description are placeholders too.
   It is the only room the key unlocks, so it is what the hunter contract
   ultimately pays for.
-- **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
-  roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
   during T4.1's malformed-input gauntlet.
