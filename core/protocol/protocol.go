@@ -5,6 +5,7 @@ package protocol
 import (
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -220,6 +221,19 @@ type Event struct {
 // trailing CR of D1.
 func trimLine(s string) string { return strings.Trim(s, " \t\r\n") }
 
+// hasControlChar reports whether s contains a control character. A raw \n
+// or \r can never reach here — the transport is itself line-delimited on
+// \n, so a client-supplied argument is structurally incapable of forging a
+// second wire line the way an embedded newline in *world* data could
+// (world.hasControlChar guards that path). What a stray control character
+// *can* still do is ride along in a value broadcast to every other client —
+// a username most of all, echoed raw in every PRESENCE/GROUP/CHAT event for
+// the rest of the session — so CONNECT rejects it at the one point of
+// entry (T4.1) rather than checking it wherever a username gets echoed.
+func hasControlChar(s string) bool {
+	return strings.ContainsFunc(s, unicode.IsControl)
+}
+
 // cut splits off the first space-separated token, tolerating repeated spaces.
 func cut(s string) (head, rest string) {
 	head, rest, _ = strings.Cut(s, " ")
@@ -241,8 +255,12 @@ func ParseCommand(line string) (Command, error) {
 
 	case VerbConnect:
 		// A username is echoed inside events, where a space would make the
-		// line ambiguous — so it must be a single token.
-		if c.Arg == "" || strings.ContainsAny(c.Arg, " \t") {
+		// line ambiguous — so it must be a single token. It's also echoed
+		// raw (not JSON) in every one of those events for the rest of the
+		// session, so a control character in it — a terminal escape
+		// sequence, most concretely, landing in every other player's raw
+		// T5.1 CLI — is rejected at the door instead (T4.1).
+		if c.Arg == "" || strings.ContainsAny(c.Arg, " \t") || hasControlChar(c.Arg) {
 			return Command{}, ErrBadRequest
 		}
 
