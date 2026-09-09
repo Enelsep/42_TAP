@@ -90,7 +90,17 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	c.send(protocol.Greeting + protocol.LineTerm)
 
+	// bufio.Scanner's default 64KB token buffer is well past MaxLineLen
+	// (1024, D5), but it's still finite: a line beyond it makes Scan return
+	// false with no way to tell that apart from a clean disconnect, so the
+	// oversized-line case (T4.1) got no reply at all instead of 400
+	// BAD_REQUEST. A buffer just past MaxLineLen fixes that — any line
+	// ParseCommand would reject as too long now fits and reaches it, so the
+	// scanner's own error path is reserved for lines the protocol was never
+	// going to accept regardless of length.
 	scanner := bufio.NewScanner(conn)
+	scanBuf := make([]byte, 0, 2*protocol.MaxLineLen)
+	scanner.Buffer(scanBuf, 2*protocol.MaxLineLen)
 	for scanner.Scan() {
 		line := scanner.Text()
 
@@ -173,6 +183,13 @@ func (s *Server) handleConn(conn net.Conn) {
 			slog.Warn("unhandled verb", "remote", remoteStr, "player", c.name, "verb", cmd.Verb)
 			c.send(protocol.FormatOK(""))
 		}
+	}
+	if scanner.Err() != nil {
+		// The only way Scan can fail here (net.Conn read errors aside) is a
+		// line past the buffer above — reply once before the deferred
+		// cleanup closes the connection, so this is a rejection (§9.3), not
+		// an unexplained drop indistinguishable from the network dying.
+		c.send(protocol.FormatErr(protocol.ErrBadRequest))
 	}
 }
 
