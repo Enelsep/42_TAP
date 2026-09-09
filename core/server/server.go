@@ -458,6 +458,10 @@ func (s *Server) handleAttack(c *Client, cmd protocol.Command) {
 
 	if npcDied {
 		log.Printf("tap server: %s killed %s", c.name, npc.ID)
+		// Room occupants otherwise only learn npc is gone on their next LOOK.
+		s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
+			Scope: protocol.EvtRoom, Kind: protocol.KindNPCDeath, NPC: npc.ID,
+		}), c) // c already knows: its own AttackReply carries target_hp:0
 	}
 	if respawned {
 		log.Printf("tap server: %s died to %s and respawned in %s", c.name, npc.ID, s.world.Start)
@@ -488,24 +492,32 @@ func (s *Server) handleDefend(c *Client) {
 }
 
 // handleFlee forces a random valid move, taking one free counter-attack from
-// any live enemy in the room on the way out (D16). The reply mirrors MOVE's
-// shape, since that is exactly what FLEE is, plus an unavoidable hit.
+// any live enemy in the room on the way out (D16). The reply carries that
+// hit's damage and c's resulting status alongside the room move, so it
+// isn't the one combat outcome the wire never reports.
 func (s *Server) handleFlee(c *Client) {
 	oldRoom := c.room
-	target, respawned, ok := s.hub.Flee(c)
+	reply, respawned, ok := s.hub.Flee(c)
 	if !ok {
 		c.send(protocol.FormatErr(protocol.ErrNoExit))
 		return
 	}
-	c.send(protocol.FormatOK("room=" + target))
+
+	data, err := json.Marshal(reply)
+	if err != nil {
+		log.Printf("tap server: marshal FleeReply for %s: %v", c.name, err)
+		return
+	}
+	c.send(protocol.FormatOK(string(data)))
+
 	s.hub.BroadcastRoom(oldRoom, protocol.FormatEvent(protocol.Event{
 		Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceLeave, Player: c.name,
 	}), nil)
-	s.hub.BroadcastRoom(target, protocol.FormatEvent(protocol.Event{
+	s.hub.BroadcastRoom(reply.Room, protocol.FormatEvent(protocol.Event{
 		Scope: protocol.EvtRoom, Kind: protocol.KindPresence, Presence: protocol.PresenceEnter, Player: c.name,
 	}), c)
 	if respawned {
-		log.Printf("tap server: %s died fleeing and respawned in %s", c.name, target)
+		log.Printf("tap server: %s died fleeing and respawned in %s", c.name, reply.Room)
 	}
 }
 

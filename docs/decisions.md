@@ -433,7 +433,10 @@ world-only `resolveNPC`). Its `drops` fall onto the room's floor, and any
 `kill`-type quest targeting it completes for **every player currently
 holding it active** — not just whoever landed the blow. Shared credit avoids
 inventing a "who gets it in a group" rule for a quest system that otherwise
-has none.
+has none. The kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone
+else in the room, excluding the attacker (D13's reasoning: their own
+`AttackReply` already carries `target_hp:0`) — without it, other players'
+only way to learn the NPC is gone was to LOOK again.
 
 A player reaching 0 HP respawns immediately, inside the same `AttackNPC`
 call: back to the start room at `RespawnHP`, DEFEND cleared. The handler
@@ -480,10 +483,13 @@ this fixed.
 and the roadmap commits to exactly these two: `DEFEND` (no argument →
 bare `OK`) arms a one-shot flag that halves the damage of c's *next*
 counter-attack, from ATTACK or FLEE, whichever comes first. `FLEE` (no
-argument → `OK room=<id>`, same shape as MOVE) forces a move through a
-random exit c could otherwise walk through normally (a gated one without the
-item is never picked), taking one unavoidable hit from any live enemy in the
-room on the way out.
+argument → `OK <FleeReply JSON>`: `room`, `hp`, `damage`, `status`) forces a
+move through a random exit c could otherwise walk through normally (a gated
+one without the item is never picked), taking one unavoidable hit from any
+live enemy in the room on the way out — `damage`/`hp`/`status` report that
+hit the same way `AttackReply` reports one from ATTACK, so a fled-from fight
+isn't the one combat outcome invisible on the wire; `damage` is `0` and
+`status` is c's unchanged status when no enemy shared the room to land one.
 
 Neither has a notion of "which fight" it belongs to, because nothing in this
 design does (D15): DEFEND's flag is armed until consumed by whatever hits c
@@ -504,9 +510,9 @@ any other), not smuggled through `Command.Arg` — round-trip tests cover them
 exactly like RFC verbs, which is what makes them easy to reason about
 despite not being in the spec.
 
-**Where.** `protocol.VerbDefend`, `protocol.VerbFlee`; `Hub.Defend`,
-`Hub.Flee` in `core/server/combat.go`; `handleDefend`, `handleFlee` in
-`core/server/server.go`.
+**Where.** `protocol.VerbDefend`, `protocol.VerbFlee`, `protocol.FleeReply`;
+`Hub.Defend`, `Hub.Flee` in `core/server/combat.go`; `handleDefend`,
+`handleFlee` in `core/server/server.go`.
 
 ---
 

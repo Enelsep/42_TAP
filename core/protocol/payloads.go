@@ -29,6 +29,16 @@ type StatusReply struct {
 	Status string `json:"status"` // see the Status* constants
 }
 
+// FleeReply carries FLEE's free counter-attack alongside the room move
+// (D16): Damage and HP are the room's enemy hit taken on the way out, 0/c's
+// unchanged HP when no enemy shared the room to land one.
+type FleeReply struct {
+	Room   string `json:"room"`
+	HP     int    `json:"hp"`
+	Damage int    `json:"damage"`
+	Status string `json:"status"` // see the Status* constants
+}
+
 // StatusDead is only ever seen in the AttackReply of the exchange that
 // caused it: respawn is synchronous, so a player's HP is never observably
 // 0 afterwards (D15).

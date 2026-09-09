@@ -120,10 +120,24 @@ func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, 
 	c.hp = max(0, c.hp-counter)
 
 	if c.hp == 0 {
-		h.respawnLocked(c)
-		return protocol.AttackReply{AttackerHP: c.hp, TargetHP: hp, Damage: dmg, Status: protocol.StatusDead}, false, true, true
+		h.respawnLocked(c) // sets c.hp to RespawnHP — capture 0 first, or the reply lies about the HP that caused "dead"
+		return protocol.AttackReply{AttackerHP: 0, TargetHP: hp, Damage: dmg, Status: protocol.StatusDead}, false, true, true
 	}
 	return protocol.AttackReply{AttackerHP: c.hp, TargetHP: hp, Damage: dmg, Status: protocol.StatusCombat}, false, false, true
+}
+
+// statusFor derives the Status* string for an HP value (D15): "healthy" at
+// max HP, "dead" at 0, "combat" otherwise. Shared by StatusOf and Flee so
+// there is exactly one place that encodes this three-way split.
+func statusFor(hp int) string {
+	switch {
+	case hp == 0:
+		return protocol.StatusDead
+	case hp < PlayerMaxHP:
+		return protocol.StatusCombat
+	default:
+		return protocol.StatusHealthy
+	}
 }
 
 // StatusOf reports c's current HP and derived status (D15): "healthy" at max
@@ -134,14 +148,7 @@ func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, 
 func (h *Hub) StatusOf(c *Client) protocol.StatusReply {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	status := protocol.StatusHealthy
-	switch {
-	case c.hp == 0:
-		status = protocol.StatusDead
-	case c.hp < PlayerMaxHP:
-		status = protocol.StatusCombat
-	}
-	return protocol.StatusReply{HP: c.hp, MaxHP: PlayerMaxHP, Status: status}
+	return protocol.StatusReply{HP: c.hp, MaxHP: PlayerMaxHP, Status: statusFor(c.hp)}
 }
 
 // Defend arms a one-shot flag that halves the damage of c's next
@@ -157,10 +164,12 @@ func (h *Hub) Defend(c *Client) {
 // Flee moves c through a random usable exit (never a gated one c can't open,
 // same rule MOVE follows), taking one free hit from any live enemy in the
 // room on the way out — the roadmap's "forced MOVE with one free
-// counterattack". respawned reports whether that hit was fatal, in which
+// counterattack". The reply's Damage/Status reflect that hit: Damage is 0
+// and Status carries c's already-current status when no enemy shared the
+// room to land one. respawned reports whether the hit was fatal, in which
 // case c ends up at the world's start room rather than the fled-to one. ok
 // is false only if the room has no usable exit to flee through.
-func (h *Hub) Flee(c *Client) (room string, respawned, ok bool) {
+func (h *Hub) Flee(c *Client) (reply protocol.FleeReply, respawned, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -173,22 +182,23 @@ func (h *Hub) Flee(c *Client) (room string, respawned, ok bool) {
 		exits = append(exits, target)
 	}
 	if len(exits) == 0 {
-		return "", false, false
+		return protocol.FleeReply{}, false, false
 	}
 	target := exits[rand.IntN(len(exits))]
 
+	var dmg int
 	if npc := h.roomNPCLocked(c.room); npc != nil && npc.Role == world.RoleEnemy {
-		counter := rollDamage(npc.Stats.Damage)
+		dmg = rollDamage(npc.Stats.Damage)
 		if c.defending {
-			counter -= counter / 2
+			dmg -= dmg / 2
 			c.defending = false
 		}
-		c.hp = max(0, c.hp-counter)
+		c.hp = max(0, c.hp-dmg)
 		if c.hp == 0 {
-			h.respawnLocked(c)
-			return h.world.Start, true, true
+			h.respawnLocked(c) // sets c.hp to RespawnHP — capture 0 first, same reasoning as AttackNPC
+			return protocol.FleeReply{Room: h.world.Start, HP: 0, Damage: dmg, Status: protocol.StatusDead}, true, true
 		}
 	}
 	h.setRoomLocked(c, target)
-	return target, false, true
+	return protocol.FleeReply{Room: target, HP: c.hp, Damage: dmg, Status: statusFor(c.hp)}, false, true
 }
