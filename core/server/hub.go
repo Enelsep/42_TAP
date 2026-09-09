@@ -103,7 +103,7 @@ type Hub struct {
 	groups       map[string]map[string]*Client // group id -> members, by name
 	roomItems    map[string][]string           // room id -> item ids on the floor
 	npcTalk      map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
-	grantedItems map[string]bool               // quest grant/reward item ids already created once, see grantOnceLocked
+	spawnedItems map[string]bool               // item ids that currently exist anywhere, see spawnLocked
 	npcHP        map[string]int                // npc id -> current hp, enemies only (D15); 0 = dead, gone for good
 	world        *world.World                  // read-only: item names for display-name resolution
 }
@@ -115,13 +115,16 @@ func NewHub(w *world.World) *Hub {
 		groups:       make(map[string]map[string]*Client),
 		roomItems:    make(map[string][]string),
 		npcTalk:      make(map[string]int),
-		grantedItems: make(map[string]bool),
+		spawnedItems: make(map[string]bool),
 		npcHP:        make(map[string]int),
 		world:        w,
 	}
 	for id, loc := range w.Locations {
 		if len(loc.Items) > 0 {
 			h.roomItems[id] = slices.Clone(loc.Items)
+			for _, item := range loc.Items {
+				h.spawnedItems[item] = true
+			}
 		}
 	}
 	for id, npc := range w.NPCs {
@@ -171,21 +174,31 @@ func (h *Hub) Unregister(c *Client) {
 	for id := range c.inventory {
 		h.roomItems[c.room] = append(h.roomItems[c.room], id)
 	}
+	c.inventory = map[string]bool{} // the floor owns them now
 	close(c.out)
 }
 
-// grantOnceLocked creates itemID into c's inventory the first time it is
-// requested for a quest grant or reward, and does nothing on every later
-// call for the same id — item ids are unique instances (RFC §8), the same
-// invariant TakeItem already relies on, and quest grants/rewards were the
-// one path that instead handed a fresh copy to every simultaneous holder.
+// spawnLocked creates itemID into c's inventory, unless an instance of it
+// already exists somewhere in the world — on a floor or in someone else's
+// pack. An item id is a single instance (RFC §8), the invariant TakeItem
+// already relies on; quest grants and rewards are the one path that can
+// conjure an item from nothing, so they are the one path that has to ask.
 // h.mu must already be held.
-func (h *Hub) grantOnceLocked(c *Client, itemID string) {
-	if h.grantedItems[itemID] {
+func (h *Hub) spawnLocked(c *Client, itemID string) {
+	if itemID == "" || h.spawnedItems[itemID] {
 		return
 	}
-	h.grantedItems[itemID] = true
+	h.spawnedItems[itemID] = true
 	c.inventory[itemID] = true
+}
+
+// consumeLocked destroys the instance of itemID that c is carrying, freeing
+// the id so a later spawnLocked may hand out a fresh one — without this a
+// delivered item is gone for good and every later taker of the same quest is
+// stuck holding one it can never complete. h.mu must already be held.
+func (h *Hub) consumeLocked(c *Client, itemID string) {
+	delete(c.inventory, itemID)
+	delete(h.spawnedItems, itemID)
 }
 
 // Broadcast enqueues line to every registered client.

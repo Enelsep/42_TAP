@@ -70,21 +70,32 @@ func (h *Hub) respawnLocked(c *Client) {
 // killNPCLocked marks npc dead for good, drops its items into room, and
 // completes the kill quest (if any) for every player currently holding it
 // active — kill credit is shared by everyone who has taken the contract,
-// not just whoever landed the blow (D15). h.mu must already be held.
-func (h *Hub) killNPCLocked(room string, npc *world.NPC) {
+// not just whoever landed the blow (D15).
+//
+// The reward is not shared: it is a single item instance (RFC §8), so it
+// goes to killer alone, and only if killer had taken the contract. Handing
+// it to "every holder" through spawnLocked instead gave it to whichever
+// client the map yielded first — in practice the earliest to connect, so a
+// bystander standing in the start room reliably collected the pay.
+// h.mu must already be held.
+func (h *Hub) killNPCLocked(killer *Client, room string, npc *world.NPC) {
 	h.npcHP[npc.ID] = 0
-	if len(npc.Drops) > 0 {
-		h.roomItems[room] = append(h.roomItems[room], npc.Drops...)
+	for _, drop := range npc.Drops {
+		h.roomItems[room] = append(h.roomItems[room], drop)
+		h.spawnedItems[drop] = true
 	}
 	for _, q := range h.world.Quests {
 		if q.Type != world.QuestKill || q.Target != npc.ID {
 			continue
 		}
+		earned := killer.quests[q.ID] == protocol.QuestActive
 		for _, client := range h.clients {
 			if client.quests[q.ID] == protocol.QuestActive {
 				client.quests[q.ID] = protocol.QuestCompleted
-				h.grantOnceLocked(client, q.Reward)
 			}
+		}
+		if earned {
+			h.spawnLocked(killer, q.Reward)
 		}
 	}
 }
@@ -108,7 +119,7 @@ func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, 
 	h.npcHP[npc.ID] = hp
 
 	if hp == 0 {
-		h.killNPCLocked(c.room, npc)
+		h.killNPCLocked(c, c.room, npc)
 		// c never took a counter on this branch, but c.hp may already be
 		// below max from an earlier fight — killing the NPC doesn't heal it.
 		return protocol.AttackReply{AttackerHP: c.hp, TargetHP: 0, Damage: dmg, Status: statusFor(c.hp)}, true, false, true

@@ -648,8 +648,7 @@ EventsOn('tap:evt', (event) => {
     }
     if (event.kind === 'NPC_DEATH') {
         logLine(`${pretty(event.npc || 'something')} falls`);
-        refreshRoom();
-        refreshInventory(); // kill credit is shared, so a reward may have landed
+        refreshRoom(); // whatever it dropped is on the floor now
         return;
     }
     if (event.scope === 'GROUP') {

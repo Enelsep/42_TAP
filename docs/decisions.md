@@ -433,7 +433,12 @@ world-only `resolveNPC`). Its `drops` fall onto the room's floor, and any
 `kill`-type quest targeting it completes for **every player currently
 holding it active** — not just whoever landed the blow. Shared credit avoids
 inventing a "who gets it in a group" rule for a quest system that otherwise
-has none. The kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone
+has none, and it is the only sane option once the NPC is dead for good:
+leaving the other holders active would leave them a quest with no target.
+
+The *reward*, unlike the quest state, is not shared — it cannot be, being a
+single item instance. It goes to whoever struck the killing blow, and only
+if they had taken the contract themselves. See D18. The kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone
 else in the room, excluding the attacker (D13's reasoning: their own
 `AttackReply` already carries `target_hp:0`) — without it, other players'
 only way to learn the NPC is gone was to LOOK again.
@@ -451,7 +456,8 @@ handler's `NPCIn` lookup and this call — the method reports `ok=false` and
 the handler answers `404 NPC_NOT_FOUND`, exactly the reply c would have
 gotten had it asked one tick later. Without this check the second attacker
 would re-run the death branch: drops appended to the room a second time,
-breaking §8.1 uniqueness.
+breaking §8.1 uniqueness. `TestConcurrentKillDropsOnce` drives exactly that
+race, two clients hammering the hunter's last hit point at once.
 
 ### STATUS's three values, given there is no combat *session*
 
@@ -626,3 +632,52 @@ reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
   roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
   during T4.1's malformed-input gauntlet.
+
+---
+
+## D18 — Item uniqueness is enforced by a ledger of what exists
+
+§8.1 makes an item id a *single instance*: at most one of it may exist in
+the world at any moment, in one player's pack or on one room's floor. Most
+of the code gets this for free — TAKE and DROP move an id between two
+containers under one lock, and `World.Validate`'s `checkItemSources` already
+refuses a world file where an item could enter play from two places.
+
+Quest grants and rewards are the exception: they are the only paths that
+create an item from nothing, and both fire per player. Two players holding
+the same deliver quest would each be handed a bone; a kill quest completing
+for every holder would hand each of them the reward.
+
+**The rule.** `Hub.spawnedItems` records every item id that currently
+exists. `spawnLocked` creates an item into a player's inventory *only* if
+its id is absent from that set; `consumeLocked` (delivery) destroys the
+instance and frees the id again. Both are the only ways an item enters or
+leaves the world after startup, which the tests assert directly: the ledger
+must agree, id for id, with a census of every floor and every inventory.
+
+Three consequences worth stating, because they are choices and not
+accidents:
+
+- **The kill reward goes to the killer.** `killNPCLocked` closes the quest
+  for every holder but calls `spawnLocked` only for the client that landed
+  the blow, and only if that client had taken the contract. Granting to
+  "every holder" and letting `spawnLocked` drop the duplicates looked
+  equivalent but was not: the winner was whichever client the map iteration
+  yielded first, which in practice is insertion order — so the earliest
+  player to connect reliably collected pay for a kill they never made.
+- **An uncontracted kill pays nobody.** If whoever kills the hunter never
+  asked the vendor for the contract, the water is never created, and since
+  the hunter does not respawn it never can be. Handing it to a bystander
+  holder instead would resurrect the bug above. Dropping it on the floor for
+  anyone to claim is the obvious alternative if this ever feels too harsh.
+- **A consumed grant is re-issued, but a reward is not.** Once the bone is
+  delivered its id is free, so the next player to ask the barman — or one
+  already stuck holding the quest, who need only ask again — is handed a
+  fresh one. The crysknife is *not* freed by anything, so the second player
+  to finish the delivery closes the quest unpaid. That asymmetry is what
+  unique items mean: the world holds exactly one crysknife, ever.
+
+**Where.** `spawnLocked`/`consumeLocked` in `core/server/hub.go`;
+`killNPCLocked` in `core/server/combat.go`; `QuestInfo`/`CompleteDelivery`
+in `core/server/quests.go`. `core/server/items_test.go` holds the scenarios,
+each asserting the census after every step.
