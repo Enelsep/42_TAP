@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"maps"
 	"net"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +18,15 @@ import (
 )
 
 // --- harness ---
+
+// init silences the server's slog output for the whole test binary. These
+// tests drive dozens of commands each and the per-command log buries the
+// assertion failures — but the silencing lives here rather than in a
+// TestMain because a binary may only have one of those, across both this
+// package and its external _test counterpart.
+func init() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
 
 func startTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
@@ -404,13 +412,6 @@ func TestConcurrentTakeDropStaysUnique(t *testing.T) {
 	if n := s.census()["item.spice"]; n != 1 {
 		t.Errorf("the spice exists %d times after the scramble, want 1", n)
 	}
-}
-
-// TestMain silences the server's slog output: these tests drive dozens of
-// commands each, and the per-command log buries the assertion failures.
-func TestMain(m *testing.M) {
-	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
-	os.Exit(m.Run())
 }
 
 // TestConcurrentQuestAcceptGrantsOnce has several players accept the same

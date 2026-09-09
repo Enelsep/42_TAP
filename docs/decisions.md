@@ -434,14 +434,15 @@ world-only `resolveNPC`). Its `drops` fall onto the room's floor, and any
 holding it active** — not just whoever landed the blow. Shared credit avoids
 inventing a "who gets it in a group" rule for a quest system that otherwise
 has none, and it is the only sane option once the NPC is dead for good:
-leaving the other holders active would leave them a quest with no target.
+leaving the other holders active would leave them a quest with no target. The
+kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone else in the
+room, excluding the attacker (D13's reasoning: their own `AttackReply`
+already carries `target_hp:0`) — without it, other players' only way to learn
+the NPC is gone was to LOOK again.
 
 The *reward*, unlike the quest state, is not shared — it cannot be, being a
 single item instance. It goes to whoever struck the killing blow, and only
-if they had taken the contract themselves. See D18. The kill also broadcasts `EVT ROOM NPC_DEATH <npc.id>` to everyone
-else in the room, excluding the attacker (D13's reasoning: their own
-`AttackReply` already carries `target_hp:0`) — without it, other players'
-only way to learn the NPC is gone was to LOOK again.
+if they had taken the contract themselves. See D20.
 
 A player reaching 0 HP respawns immediately, inside the same `AttackNPC`
 call: back to the start room at `RespawnHP`, DEFEND cleared. The handler
@@ -619,23 +620,7 @@ reconnects) are exactly what `floodThreshold`/`reconnectThreshold` encode.
 
 ---
 
-## Still open
-
-- **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
-  name, dialogue and stats, but `bossroom` carries no `spawns` entry pointing
-  at it, so nothing is actually there to ATTACK yet (confirmed live while
-  testing D15/D16: the door opens with the key exactly as designed, the room
-  is just empty). `bossroom`'s own name and description are placeholders too.
-  It is the only room the key unlocks, so it is what the hunter contract
-  ultimately pays for.
-- **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
-  roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
-- **Control characters in messages** (§9.2: "reject or safely handle") — decide
-  during T4.1's malformed-input gauntlet.
-
----
-
-## D18 — Item uniqueness is enforced by a ledger of what exists
+## D20 — Item uniqueness is enforced by a ledger of what exists
 
 §8.1 makes an item id a *single instance*: at most one of it may exist in
 the world at any moment, in one player's pack or on one room's floor. Most
@@ -681,3 +666,19 @@ accidents:
 `killNPCLocked` in `core/server/combat.go`; `QuestInfo`/`CompleteDelivery`
 in `core/server/quests.go`. `core/server/items_test.go` holds the scenarios,
 each asserting the census after every step.
+
+---
+
+## Still open
+
+- **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
+  name, dialogue and stats, but `bossroom` carries no `spawns` entry pointing
+  at it, so nothing is actually there to ATTACK yet (confirmed live while
+  testing D15/D16: the door opens with the key exactly as designed, the room
+  is just empty). `bossroom`'s own name and description are placeholders too.
+  It is the only room the key unlocks, so it is what the hunter contract
+  ultimately pays for.
+- **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
+  roadmap T5.2 picks the translating layer, to be confirmed once the CLI exists.
+- **Control characters in messages** (§9.2: "reject or safely handle") — decide
+  during T4.1's malformed-input gauntlet.
