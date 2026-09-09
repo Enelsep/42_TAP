@@ -54,7 +54,7 @@ type Item struct {
 	ID          string `json:"-"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Obtainable  bool   `json:"obtainable"` // false = cannot be taken off the floor, only granted
+	Obtainable  bool   `json:"obtainable"` // false = must not appear in a location's static items list (Validate); not enforced at TAKE
 }
 
 type NPC struct {

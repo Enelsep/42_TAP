@@ -217,13 +217,23 @@ once completed, since both our quests have a single objective.
 
 `QUEST <npc>` is the only entry point. Each quest-giver carries a `quest`
 back-pointer in the world data, so the lookup is direct. `406
-NO_QUEST_AVAILABLE` covers three cases: the NPC gives no quest, the player has
-already completed it, or the player already holds it — the RFC explicitly folds
-"already completed" into this code.
+NO_QUEST_AVAILABLE` covers two cases: the NPC gives no quest, or the player has
+already completed it — the RFC explicitly folds "already completed" into this
+code. Calling it again while the quest is active is not a third case: D14
+returns `OK` with the quest's `active` dialogue line, same as any other
+`QUEST` call on a giver whose quest is in progress.
 
 Accepting a quest may hand the player an item, declared as `grants` on the
-quest. This is the only way an `obtainable: false` item enters the world: the
-flag means "cannot be picked up off the floor", not "does not exist".
+quest — but `grants` is not the only way an `obtainable: false` item enters
+the world: the hunter's `key` arrives as an NPC `drops` entry, and
+`water`/`crysknife` arrive as quest `reward`s. The flag is also not enforced
+at `TAKE`: an `obtainable: false` item already on the floor (the key, once
+dropped) can still be picked up, and must be able to — a hunter killed
+before the contract is taken would otherwise leave the boss room
+permanently unreachable, the same reasoning the drop-vs-reward choice below
+already relies on. `obtainable: false` only means "must never appear in a
+location's static `items` list" — enforced by `World.Validate`
+(`core/world/validate.go`) at load time — nothing more.
 
 ### Completion is automatic, and there are no extra commands
 
