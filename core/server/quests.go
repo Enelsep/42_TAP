@@ -48,8 +48,8 @@ func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line, quest string, o
 		if c.quests[q.ID] != protocol.QuestActive || !c.inventory[q.Grants] {
 			continue
 		}
-		delete(c.inventory, q.Grants)
-		h.grantOnceLocked(c, q.Reward)
+		h.consumeLocked(c, q.Grants)
+		h.spawnLocked(c, q.Reward)
 		c.quests[q.ID] = protocol.QuestCompleted
 		return q.Dialogue.Complete, q.ID, true
 	}
@@ -74,12 +74,14 @@ func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description,
 	case protocol.QuestCompleted:
 		return nil, "", "", false, false
 	case protocol.QuestActive:
+		// Asking again re-hands the grant if the instance is gone (another
+		// player delivered it) and c is not the one carrying it; spawnLocked
+		// no-ops in every other case, so this cannot mint a second one.
+		h.spawnLocked(c, q.Grants)
 		return q, q.Dialogue.Active, protocol.QuestActive, false, true
 	default:
 		c.quests[q.ID] = protocol.QuestActive
-		if q.Grants != "" {
-			h.grantOnceLocked(c, q.Grants)
-		}
+		h.spawnLocked(c, q.Grants)
 		return q, q.Dialogue.Offer, protocol.QuestActive, true, true
 	}
 }

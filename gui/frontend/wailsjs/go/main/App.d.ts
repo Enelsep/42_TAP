@@ -10,9 +10,13 @@ export function Connect(arg1:string,arg2:string):Promise<void>;
 
 export function Connected():Promise<boolean>;
 
+export function Defend():Promise<void>;
+
 export function Disconnect():Promise<void>;
 
 export function Drop(arg1:string):Promise<string>;
+
+export function Flee():Promise<protocol.FleeReply>;
 
 export function GroupCreate():Promise<string>;
 
