@@ -337,19 +337,28 @@ player currently in one).
   `404 GROUP_NOT_FOUND` (`protocol.ErrGroupNotFound`), reusing 404 exactly as
   quirk #3 does — disambiguated by symbol, not a fourth meaning for the bare
   code.
+- *`CHAT GROUP` with no group:* `401 NOT_IN_GROUP`. This one is not RFC-silent
+  after all — §8.2 already has the code, and `GROUP LEAVE`/`GROUP INVITE`
+  already answer it for the identical mistake. It used to reply `OK` and send
+  nothing, on the reasoning below about empty scopes; that was wrong. An empty
+  room is a room you are really in, so the message was really delivered, to
+  nobody. A group you are not in is not a scope at all, and answering `OK` told
+  the player their message had gone somewhere.
 
 **Rationale.** The id scheme needs no coordination or counter: names are
 already unique in the hub (`Hub.Register`), so reusing one is free and the
 result (`OK group=alice`) is immediately legible to the player who typed
 `GROUP CREATE`, unlike an opaque generated id. Silently no-opping the invite
-matches how every other scope-with-nobody-listening already behaves in this
-codebase (`CHAT ROOM` in an empty room, `CHAT GROUP` with no group — see the
-handler). `GROUP_NOT_FOUND` follows D5's reasoning for adding a code at all:
-it sits in the RFC's own 4xx/404 range, so a peer applying the §7.3 severity
-rule classifies it correctly even without recognising the symbol.
+matches how a scope with nobody listening behaves elsewhere (`CHAT ROOM` in an
+empty room) — the distinction being that the invitee's absence does not make
+the inviter's own group any less real. `GROUP_NOT_FOUND` follows D5's
+reasoning for adding a code at all: it sits in the RFC's own 4xx/404 range,
+so a peer applying the §7.3 severity rule classifies it correctly even
+without recognising the symbol.
 
 **Where.** `Hub.CreateGroup`, `Hub.JoinGroup`, `Hub.SendTo` in
-`core/server/hub.go`; `protocol.ErrGroupNotFound`.
+`core/server/hub.go`; `handleChat`'s group guard in `core/server/server.go`;
+`protocol.ErrGroupNotFound`.
 
 ---
 

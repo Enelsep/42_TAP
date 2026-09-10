@@ -286,6 +286,48 @@ func TestCoalescing(t *testing.T) {
 	}
 }
 
+// TestGroupChatWithoutAGroup: CHAT GROUP with no group is 401 NOT_IN_GROUP,
+// the same code GROUP LEAVE/INVITE already answer for the same mistake —
+// rather than the OK-and-say-nothing it used to get (D12).
+func TestGroupChatWithoutAGroup(t *testing.T) {
+	c := connected(t, "loner")
+
+	c.send("CHAT GROUP anyone there")
+	if got, want := c.reply(), wantErr(protocol.ErrNotInGroup); got != want {
+		t.Errorf("CHAT GROUP with no group = %q, want %q", got, want)
+	}
+
+	// The other two scopes still speak into the void without complaining:
+	// an empty room is not an error, only an absent group is.
+	c.send("CHAT ROOM anyone there")
+	if got, want := c.reply(), strings.TrimSuffix(protocol.FormatOK(""), protocol.LineTerm); got != want {
+		t.Errorf("CHAT ROOM = %q, want %q", got, want)
+	}
+
+	// With a group, the message goes out and reaches the sender (D13).
+	c.send("GROUP CREATE")
+	if got := c.reply(); got != "OK group=loner" {
+		t.Fatalf("GROUP CREATE = %q", got)
+	}
+	c.send("CHAT GROUP anyone there")
+	if got, want := c.reply(), strings.TrimSuffix(protocol.FormatOK(""), protocol.LineTerm); got != want {
+		t.Errorf("CHAT GROUP in a group = %q, want %q", got, want)
+	}
+	if c.readUntil(2*time.Second, func(l string) bool {
+		return l == "EVT GROUP CHAT loner anyone there"
+	}) == "" {
+		t.Error("the group message never came back to its sender")
+	}
+
+	// Leaving puts it back to 401.
+	c.send("GROUP LEAVE")
+	c.reply()
+	c.send("CHAT GROUP still there")
+	if got, want := c.reply(), wantErr(protocol.ErrNotInGroup); got != want {
+		t.Errorf("CHAT GROUP after leaving = %q, want %q", got, want)
+	}
+}
+
 // TestNoLeakedPlayers runs last (declaration order) and checks every
 // player from every test above — CONNECTed and either QUIT or simply
 // closed via t.Cleanup — is gone from the hub. A leaked entry would mean a
