@@ -2,10 +2,7 @@ package main
 
 import "strings"
 
-// translateInput maps a few natural phrasings onto their RFC verb (T5.2):
-// "go north" → "MOVE north", "say hi" → "CHAT ROOM hi", etc. Trigger words
-// never collide with an RFC verb, so everything else — full RFC syntax
-// included — passes through unchanged.
+// translateInput maps a few natural phrasings onto their RFC verb (T5.2)
 func translateInput(line string) string {
 	verb, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
 	switch strings.ToLower(verb) {

@@ -243,8 +243,6 @@ func (a *App) Send(raw string) (string, error) {
 	return a.command(cmd)
 }
 
-// --- typed helpers, one per RFC command ---
-
 func (a *App) Look() (protocol.LookReply, error) {
 	return decode[protocol.LookReply](a, protocol.Command{Verb: protocol.VerbLook})
 }

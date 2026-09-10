@@ -19,25 +19,23 @@ const (
 type Verb string
 
 const (
-	VerbConnect   Verb = "CONNECT"   // CONNECT <username>          → OK connected
-	VerbLook      Verb = "LOOK"      // LOOK                        → OK <LookReply JSON>
-	VerbMove      Verb = "MOVE"      // MOVE <direction>            → OK room=<room.id>
-	VerbQuit      Verb = "QUIT"      // QUIT                        → OK bye
-	VerbChat      Verb = "CHAT"      // CHAT <scope> <message…>     → OK
-	VerbWho       Verb = "WHO"       // WHO                         → OK players=<count>
-	VerbGroup     Verb = "GROUP"     // GROUP <subcommand> [arg]    → see GroupSub
-	VerbTake      Verb = "TAKE"      // TAKE <item…>                → OK taken=<item.id>
-	VerbDrop      Verb = "DROP"      // DROP <item…>                → OK dropped=<item.id>
-	VerbInventory Verb = "INVENTORY" // INVENTORY                   → OK <InventoryReply JSON>
-	VerbTalk      Verb = "TALK"      // TALK <npc>                  → OK <dialogue text>
-	VerbAttack    Verb = "ATTACK"    // ATTACK <npc>                → OK <AttackReply JSON>
-	VerbStatus    Verb = "STATUS"    // STATUS                      → OK <StatusReply JSON>
-	VerbQuest     Verb = "QUEST"     // QUEST <npc>                 → OK <QuestReply JSON>
-	VerbQuests    Verb = "QUESTS"    // QUESTS                      → OK <QuestsReply JSON>
+	VerbConnect   Verb = "CONNECT"
+	VerbLook      Verb = "LOOK"
+	VerbMove      Verb = "MOVE"
+	VerbQuit      Verb = "QUIT"
+	VerbChat      Verb = "CHAT"
+	VerbWho       Verb = "WHO"
+	VerbGroup     Verb = "GROUP"
+	VerbTake      Verb = "TAKE"
+	VerbDrop      Verb = "DROP"
+	VerbInventory Verb = "INVENTORY"
+	VerbTalk      Verb = "TALK"
+	VerbAttack    Verb = "ATTACK"
+	VerbStatus    Verb = "STATUS"
+	VerbQuest     Verb = "QUEST"
+	VerbQuests    Verb = "QUESTS"
 
-	// Non-RFC (§2.6, D16): our own combat extras. Never required for
-	// interop — our clients need not send them against another group's
-	// server, and another group's client will simply never send them to us.
+	// Non-RFC: our own combat extras.
 	VerbDefend Verb = "DEFEND" // DEFEND                      → OK
 	VerbFlee   Verb = "FLEE"   // FLEE                         → OK <FleeReply JSON>
 )
@@ -61,14 +59,14 @@ const (
 
 type Command struct {
 	Verb  Verb
-	Scope ChatScope // CHAT only
-	Sub   GroupSub  // GROUP only
+	Scope ChatScope
+	Sub   GroupSub
 	Arg   string
 }
 
 type Reply struct {
-	Err  *Error `json:"err,omitempty"`  // nil on success
-	Data string `json:"data,omitempty"` // everything after "OK", or after the error symbol
+	Err  *Error `json:"err,omitempty"`
+	Data string `json:"data,omitempty"`
 }
 
 func (r Reply) OK() bool { return r.Err == nil }
@@ -206,31 +204,18 @@ type Event struct {
 }
 
 // --- parsing and formatting ---
-//
-// Format* always appends LineTerm; Parse* accepts a line with or without it.
-// Tolerance rule (D1, D4): unknown constructs are accepted, malformed known
-// ones return ErrBadRequest — the only error any Parse* ever returns.
 
-// trimLine strips the terminator and surrounding whitespace, including the
-// trailing CR of D1.
 func trimLine(s string) string { return strings.Trim(s, " \t\r\n") }
 
-// hasControlChar reports whether s contains a control character. An
-// embedded \n/\r can't forge a second wire line — framing is transport-level.
-// The real risk is a control byte riding along in a value echoed raw to
-// other clients, e.g. a username or chat message in a PRESENCE/CHAT event.
 func hasControlChar(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// cut splits off the first space-separated token, tolerating repeated spaces.
 func cut(s string) (head, rest string) {
 	head, rest, _ = strings.Cut(s, " ")
 	return head, strings.TrimLeft(rest, " ")
 }
 
-// ParseCommand parses a client → server line. Verbs and keywords are
-// case-insensitive (§4.2); Arg is the untouched rest of the line (D6).
 func ParseCommand(line string) (Command, error) {
 	if len(line) > MaxLineLen {
 		return Command{}, ErrBadRequest
@@ -243,10 +228,6 @@ func ParseCommand(line string) (Command, error) {
 		c.Arg = "" // takes no argument; trailing tokens are ignored
 
 	case VerbConnect:
-		// Echoed raw into every PRESENCE/CHAT/GROUP event for the session:
-		// must be a single token (a space would make the line ambiguous),
-		// and control chars/length are capped so one name can't degrade
-		// every other player's terminal for the whole session.
 		if c.Arg == "" || len(c.Arg) > MaxUsernameLen || strings.ContainsAny(c.Arg, " \t") || hasControlChar(c.Arg) {
 			return Command{}, ErrBadRequest
 		}

@@ -9,10 +9,6 @@ import (
 	"github.com/Enelsep/42_TAP/core/protocol"
 )
 
-// renderer turns wire lines into readable ones (T5.2). A reply carries no
-// verb of its own, so expect records each command's verb as it goes out,
-// and reply pops the oldest one for the next non-EVT line back — wire
-// order is FIFO on both sides, so a plain queue is enough.
 type renderer struct {
 	pending chan protocol.Verb
 }

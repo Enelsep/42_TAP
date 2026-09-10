@@ -56,8 +56,6 @@ const TRACKS = {
 
 const MUSIC_VOLUME = 1;
 
-// Item id -> icon. An item with no icon still renders, by name, so another
-// group's world cannot leave the panels blank.
 const ITEM_ICONS = {
     'item.key': iconKey, 'item.bone': iconBone, 'item.crysknife': iconCrysknife,
     'item.liquor': iconLiquor, 'item.spice': iconSpice, 'item.water': iconWater,
@@ -110,9 +108,7 @@ function toast(text, isError = false) {
 
 // --- dialogue box ---------------------------------------------------------
 
-const TYPE_MS = 24; // per character
-// A beat on punctuation is most of what makes the crawl read as speech
-// rather than as a progress bar.
+const TYPE_MS = 24;
 const TYPE_PAUSE = { ',': 130, ';': 130, ':': 130, '.': 210, '!': 210, '?': 210, '\u2014': 170 };
 
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -133,8 +129,6 @@ function finishTyping() {
     stopTyping();
 }
 
-// Streams text one code point at a time — Array.from, not indexing, so a
-// multi-unit character (surrogate pair) never gets torn in half.
 function typeInto(text) {
     stopTyping();
     const node = $('dialogue-text');
@@ -181,10 +175,6 @@ async function guard(fn) {
         return { ok: false };
     }
 }
-
-// --- rendering ------------------------------------------------------------
-
-// --- room music ------------------------------------------------------------
 
 const music = new Audio();
 music.loop = true;
@@ -451,10 +441,6 @@ async function refreshWho() {
     if (who.ok) $('count-server').textContent = who.value;
 }
 
-// --- picker ---------------------------------------------------------------
-
-// Resolves to a chosen value, a typed one, or null. Typing is what lets a
-// player use a display name where the buttons offer canonical ids.
 function pick(title, choices, placeholder = '…or type a name') {
     return new Promise((resolve) => {
         const done = (value) => {
@@ -519,9 +505,6 @@ async function talkTo(id) {
     if (!said.ok) return;
     logLine(`${pretty(id)}: ${said.value}`);
     showDialogue(pretty(id), said.value);
-    // Talking to a delivery target completes the quest server-side: the
-    // carried item is consumed and the reward granted, and neither shows up
-    // until we ask again.
     await Promise.all([refreshInventory(), refreshRoom()]);
 }
 
@@ -590,9 +573,6 @@ async function askQuest(id) {
     await refreshInventory(); // accepting can grant the quest item on the spot
 }
 
-// Protocol statuses, in the player's words. "available" never arrives from our
-// own server — asking for a quest accepts it on the spot (D10) — but a peer's
-// server may report it, so the panel renders all three.
 const QUEST_LABELS = { available: 'offer', active: 'active', completed: 'complete' };
 
 async function listQuests() {
@@ -705,8 +685,6 @@ const ACTIONS = {
     GROUP: groupMenu,
 };
 
-// --- server events --------------------------------------------------------
-
 EventsOn('tap:evt', (event) => {
     if (event.scope === 'STATS') {
         $('count-server').textContent = event.players ?? 0;
@@ -745,8 +723,6 @@ EventsOn('tap:disconnected', () => {
 
 function showConnect() {
     stopMusic();
-    // Any modal still up would sit on top of the connect form. Cancelling
-    // the picker rather than hiding it also settles whoever is awaiting it.
     closeCombat();
     $('quests').hidden = true;
     $('picker-cancel').onclick?.();
