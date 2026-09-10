@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	ProtoVersion = 1
-	Greeting     = "OK hello proto=1"
-	LineTerm     = "\n"
-	MaxLineLen   = 1024
+	ProtoVersion   = 1
+	Greeting       = "OK hello proto=1"
+	LineTerm       = "\n"
+	MaxLineLen     = 1024
+	MaxUsernameLen = 12
 )
 
 type Verb string
@@ -259,8 +260,10 @@ func ParseCommand(line string) (Command, error) {
 		// raw (not JSON) in every one of those events for the rest of the
 		// session, so a control character in it — a terminal escape
 		// sequence, most concretely, landing in every other player's raw
-		// T5.1 CLI — is rejected at the door instead (T4.1).
-		if c.Arg == "" || strings.ContainsAny(c.Arg, " \t") || hasControlChar(c.Arg) {
+		// T5.1 CLI — is rejected at the door instead (T4.1). Same reasoning
+		// caps the length: an unbounded name gets re-echoed in every other
+		// player's UI for the whole session too.
+		if c.Arg == "" || len(c.Arg) > MaxUsernameLen || strings.ContainsAny(c.Arg, " \t") || hasControlChar(c.Arg) {
 			return Command{}, ErrBadRequest
 		}
 
@@ -277,7 +280,12 @@ func ParseCommand(line string) (Command, error) {
 		default:
 			return Command{}, ErrBadRequest
 		}
-		if msg == "" {
+		// A chat message is echoed raw (not JSON) into every recipient's
+		// EVT CHAT — including a bare-RFC or -raw client — so a control
+		// character in it reaches every other player's terminal exactly
+		// like one in a username would (same reasoning as VerbConnect
+		// above); rejected here instead, for the same reason.
+		if msg == "" || hasControlChar(msg) {
 			return Command{}, ErrBadRequest
 		}
 

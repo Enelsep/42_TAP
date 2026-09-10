@@ -195,14 +195,14 @@ func TestConnectRejectsControlChar(t *testing.T) {
 // docs/decisions.md), and this test is what proves reusing it doesn't
 // silently corrupt c.name/c.room along the way.
 func TestDoubleConnect(t *testing.T) {
-	c := connected(t, "doubleconnect")
+	c := connected(t, "dblconnect")
 	c.send("CONNECT someoneelse")
 	if got, want := c.reply(), wantErr(protocol.ErrNameInUse); got != want {
 		t.Errorf("second CONNECT = %q, want %q", got, want)
 	}
 	c.send("LOOK")
-	if look := c.reply(); !strings.Contains(look, `"doubleconnect"`) {
-		t.Errorf("LOOK after rejected re-CONNECT = %q, want it to still list doubleconnect", look)
+	if look := c.reply(); !strings.Contains(look, `"dblconnect"`) {
+		t.Errorf("LOOK after rejected re-CONNECT = %q, want it to still list dblconnect", look)
 	}
 }
 
