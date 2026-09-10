@@ -266,6 +266,12 @@ func (s *Server) handleMove(c *Client, cmd protocol.Command) {
 // handleChat replies OK, then broadcasts the corresponding EVT *CHAT to the
 // requested scope — sender included, per the RFC's own example transcript.
 func (s *Server) handleChat(c *Client, cmd protocol.Command) {
+	// Ahead of the OK: speaking to a group you are not in is the same
+	// mistake as leaving one you are not in, and gets the same 401 (D12).
+	if cmd.Scope == protocol.ChatGroup && c.group == "" {
+		c.send(protocol.FormatErr(protocol.ErrNotInGroup))
+		return
+	}
 	c.send(protocol.FormatOK(""))
 
 	var scope protocol.EventScope
@@ -290,12 +296,7 @@ func (s *Server) handleChat(c *Client, cmd protocol.Command) {
 	case protocol.ChatRoom:
 		s.hub.BroadcastRoom(c.room, line, nil)
 	case protocol.ChatGroup:
-		// No group to speak to is not a protocol error (the RFC defines none
-		// for it): same as talking in an empty room, the OK stands and
-		// nothing goes out. See D12.
-		if c.group != "" {
-			s.hub.BroadcastGroup(c.group, line, nil)
-		}
+		s.hub.BroadcastGroup(c.group, line, nil)
 	}
 }
 
