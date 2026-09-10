@@ -20,7 +20,8 @@ as an editing slip. Stripping `CR` on receive costs one line of code and makes
 us interoperable with any group that read §3.1 literally, or with a peer testing
 us through `telnet`, which sends CRLF.
 
-**Where.** `protocol.LineTerm`; the `CR` strip lives in `Parse`.
+**Where.** `protocol.LineTerm`; the `CR` strip lives in `trimLine`, shared by
+`ParseCommand`, `ParseReply` and `ParseEvent`.
 
 ---
 
@@ -819,8 +820,8 @@ which is a new mechanic and a larger decision than this one.
 
 **Where.** `NPC.Requires` in `core/world/world.go` (canonicalised at load
 like every other reference); its checks in `core/world/validate.go`;
-`UnarmedDamage` and the `AttackNPC` branch in `core/server/combat.go`;
-`core/server/boss_test.go`.
+`UnarmedDamage` and the `AttackNPC` branch in `core/server/combat.go`.
+Untested — no `core/server/boss_test.go` exists yet.
 
 ---
 

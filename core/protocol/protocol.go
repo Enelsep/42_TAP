@@ -188,10 +188,8 @@ const (
 	PresenceLeave Presence = "LEAVE"
 )
 
-// Quirk #4: GROUP INVITE carries only a player name, so the invitee cannot
-// tell which group to JOIN. Our clients therefore keep Raw around and tolerate
-// trailing tokens they do not understand, rather than rejecting the line —
-// other groups may resolve this differently.
+// Quirk #4: GROUP INVITE carries only a player name, not a group id (D4) —
+// Raw lets clients tolerate what they don't recognise instead of rejecting it.
 type Event struct {
 	Scope    EventScope `json:"scope"`
 	Kind     EventKind  `json:"kind,omitempty"`     // empty for EvtStats
@@ -209,28 +207,18 @@ type Event struct {
 
 // --- parsing and formatting ---
 //
-// Every Format* result already ends with LineTerm: framing belongs to the
-// protocol, not to its callers, so an unterminated line can never reach the
-// wire. Every Parse* accepts a line with or without its terminator.
-//
-// Tolerance rule (D1, D4): unknown constructs are accepted — extra tokens,
-// unknown event scopes and kinds — but a malformed *known* construct is an
-// error. Only ErrBadRequest is ever returned; the server turns it into a wire
-// response, clients merely log it.
+// Format* always appends LineTerm; Parse* accepts a line with or without it.
+// Tolerance rule (D1, D4): unknown constructs are accepted, malformed known
+// ones return ErrBadRequest — the only error any Parse* ever returns.
 
 // trimLine strips the terminator and surrounding whitespace, including the
 // trailing CR of D1.
 func trimLine(s string) string { return strings.Trim(s, " \t\r\n") }
 
-// hasControlChar reports whether s contains a control character. A raw \n
-// or \r can never reach here — the transport is itself line-delimited on
-// \n, so a client-supplied argument is structurally incapable of forging a
-// second wire line the way an embedded newline in *world* data could
-// (world.hasControlChar guards that path). What a stray control character
-// *can* still do is ride along in a value broadcast to every other client —
-// a username most of all, echoed raw in every PRESENCE/GROUP/CHAT event for
-// the rest of the session — so CONNECT rejects it at the one point of
-// entry (T4.1) rather than checking it wherever a username gets echoed.
+// hasControlChar reports whether s contains a control character. An
+// embedded \n/\r can't forge a second wire line — framing is transport-level.
+// The real risk is a control byte riding along in a value echoed raw to
+// other clients, e.g. a username or chat message in a PRESENCE/CHAT event.
 func hasControlChar(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
@@ -255,14 +243,10 @@ func ParseCommand(line string) (Command, error) {
 		c.Arg = "" // takes no argument; trailing tokens are ignored
 
 	case VerbConnect:
-		// A username is echoed inside events, where a space would make the
-		// line ambiguous — so it must be a single token. It's also echoed
-		// raw (not JSON) in every one of those events for the rest of the
-		// session, so a control character in it — a terminal escape
-		// sequence, most concretely, landing in every other player's raw
-		// T5.1 CLI — is rejected at the door instead (T4.1). Same reasoning
-		// caps the length: an unbounded name gets re-echoed in every other
-		// player's UI for the whole session too.
+		// Echoed raw into every PRESENCE/CHAT/GROUP event for the session:
+		// must be a single token (a space would make the line ambiguous),
+		// and control chars/length are capped so one name can't degrade
+		// every other player's terminal for the whole session.
 		if c.Arg == "" || len(c.Arg) > MaxUsernameLen || strings.ContainsAny(c.Arg, " \t") || hasControlChar(c.Arg) {
 			return Command{}, ErrBadRequest
 		}
@@ -280,11 +264,8 @@ func ParseCommand(line string) (Command, error) {
 		default:
 			return Command{}, ErrBadRequest
 		}
-		// A chat message is echoed raw (not JSON) into every recipient's
-		// EVT CHAT — including a bare-RFC or -raw client — so a control
-		// character in it reaches every other player's terminal exactly
-		// like one in a username would (same reasoning as VerbConnect
-		// above); rejected here instead, for the same reason.
+		// Same reasoning as VerbConnect: echoed raw to every recipient, so
+		// a control character reaches every other player's terminal.
 		if msg == "" || hasControlChar(msg) {
 			return Command{}, ErrBadRequest
 		}

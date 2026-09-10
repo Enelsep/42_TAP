@@ -313,10 +313,8 @@ func (a *App) Attack(npc string) (protocol.AttackReply, error) {
 	return decode[protocol.AttackReply](a, protocol.Command{Verb: protocol.VerbAttack, Arg: npc})
 }
 
-// Defend halves the next hit taken (D15). DEFEND and FLEE are this server's
-// combat extensions, not RFC commands: another group's server may answer
-// 400 BAD_REQUEST, which reaches the frontend as a rejected promise like any
-// other error.
+// Defend halves the next hit taken (D15). Non-RFC, like Flee: another
+// group's server may answer 400 BAD_REQUEST, same as any other error.
 func (a *App) Defend() error {
 	_, err := a.command(protocol.Command{Verb: protocol.VerbDefend})
 	return err

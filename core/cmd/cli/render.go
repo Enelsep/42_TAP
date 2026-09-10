@@ -10,12 +10,9 @@ import (
 )
 
 // renderer turns wire lines into readable ones (T5.2). A reply carries no
-// verb of its own — only whoever sent the matching command knows what kind
-// of answer to expect (T6.1's GUI backend pairs them the same way) — so
-// expect records each command's verb as it goes out, and reply pops the
-// oldest one for the next non-EVT line that comes back. Wire order between
-// one client and the server is FIFO on both sides, so a plain queue is
-// enough; nothing here needs to correlate by content.
+// verb of its own, so expect records each command's verb as it goes out,
+// and reply pops the oldest one for the next non-EVT line back — wire
+// order is FIFO on both sides, so a plain queue is enough.
 type renderer struct {
 	pending chan protocol.Verb
 }
@@ -33,10 +30,8 @@ func (r *renderer) expect(v protocol.Verb) {
 }
 
 // line renders one line received from the server. It never errors:
-// anything not specifically recognized — an unfamiliar payload shape, a
-// parse failure, an event kind from a future RFC revision (D8's tolerance
-// policy) — prints exactly as it arrived, the same "pass it through raw"
-// principle translateInput applies on the way in.
+// anything unrecognized (D8's tolerance policy) prints as it arrived —
+// the same "pass it through raw" principle translateInput applies inbound.
 func (r *renderer) line(raw string) string {
 	if protocol.IsEvent(raw) {
 		return r.renderEvent(raw)

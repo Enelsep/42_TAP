@@ -40,12 +40,9 @@ const BACKDROPS = {
     'loc.start': start, 'loc.suburbs': suburbs,
 };
 
-// Same rooms, painted without their enemy. Used once that enemy is dead —
-// which the client reads off LOOK, since the server drops a killed enemy from
-// the room's npcs (D15). Only the two enemy rooms have a variant, and each
-// holds exactly one NPC, so "no npcs here" is the same statement as "the
-// enemy is dead"; a room with an enemy *and* a merchant would need the
-// enemy's id checked by name instead.
+// Same rooms, painted without their enemy — used once LOOK's npcs list is
+// empty (the server drops a killed enemy, D15). Only works because each of
+// these two rooms holds exactly one NPC.
 const BACKDROPS_CLEARED = {
     'loc.bossroom': bossClear, 'loc.nest': nestClear,
 };
@@ -136,9 +133,8 @@ function finishTyping() {
     stopTyping();
 }
 
-// Streams text one code point at a time. Array.from is what keeps a
-// multi-unit character whole: the being beyond the veil speaks in symbols,
-// and indexing a JS string would tear a surrogate pair in half.
+// Streams text one code point at a time — Array.from, not indexing, so a
+// multi-unit character (surrogate pair) never gets torn in half.
 function typeInto(text) {
     stopTyping();
     const node = $('dialogue-text');

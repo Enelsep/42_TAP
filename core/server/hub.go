@@ -59,13 +59,10 @@ func (c *Client) send(line string) {
 // room dumps instead of the player actions D17 actually wants visible.
 const maxLoggedReplyData = 200
 
-// logReply logs the OK/ERR outcome of one reply, the moment it is handed to
+// logReply logs the OK/ERR outcome of one reply, the moment it's handed to
 // send — every handler's outcome ends up here without threading a logger
-// through all of them (D17). Every broadcast helper (Broadcast, BroadcastRoom,
-// BroadcastGroup, SendTo) also funnels through send, but an EVT line matches
-// neither prefix and is skipped: it is a notification about someone else's
-// action, not a reply to this client's own command, and logging it here
-// would misattribute it.
+// through all of them (D17). EVT lines match neither prefix and are
+// skipped: they're a notification about someone else's action, not a reply.
 func logReply(player, line string) {
 	head, rest, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
 	switch head {
@@ -93,10 +90,8 @@ func (c *Client) writeLoop() {
 	}
 }
 
-// Hub is the mutex-guarded registry of connected, named clients, the groups
-// they've formed, and the dynamic (post-startup) item placement — the whole
-// of the game's mutable state behind one lock, per the roadmap's concurrency
-// model.
+// Hub is the mutex-guarded registry of connected clients, groups, and
+// dynamic item placement — all mutable game state behind one lock.
 type Hub struct {
 	mu           sync.Mutex
 	clients      map[string]*Client
@@ -147,16 +142,14 @@ func (h *Hub) Register(c *Client) bool {
 	return true
 }
 
-// Unregister removes c from every index that can reach it — the client
-// registry and, if it was in one, its group — then closes its outbound
-// channel, which stops its writeLoop goroutine. A client left behind in any
-// index is a ghost: the next broadcast to it sends on a closed channel and
-// panics the whole process, not just that connection.
+// Unregister removes c from every index that can reach it — client registry
+// and group, if any — then closes its outbound channel, stopping writeLoop.
+// A client left in any index is a ghost: the next broadcast to it sends on
+// a closed channel and panics the process.
 //
-// c's inventory is dropped onto its current room's floor first. Without
-// this a disconnect destroyed whatever c was carrying — for the hunter's
-// key, the only way into bossroom and with no other source once the hunter
-// is dead (D15), that meant one QUIT could lock the room for good.
+// c's inventory drops onto its room's floor first — otherwise a disconnect
+// destroyed whatever c was carrying, which for a one-of-a-kind key could
+// lock a gated room for good.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -178,12 +171,10 @@ func (h *Hub) Unregister(c *Client) {
 	close(c.out)
 }
 
-// spawnLocked creates itemID into c's inventory, unless an instance of it
-// already exists somewhere in the world — on a floor or in someone else's
-// pack. An item id is a single instance (RFC §8), the invariant TakeItem
-// already relies on; quest grants and rewards are the one path that can
-// conjure an item from nothing, so they are the one path that has to ask.
-// h.mu must already be held.
+// spawnLocked creates itemID into c's inventory, unless an instance already
+// exists somewhere in the world. Items are single instances (RFC §8); quest
+// grants/rewards are the one path that conjures one from nothing, so it's
+// the one path that has to check. h.mu must already be held.
 func (h *Hub) spawnLocked(c *Client, itemID string) {
 	if itemID == "" || h.spawnedItems[itemID] {
 		return
@@ -192,10 +183,9 @@ func (h *Hub) spawnLocked(c *Client, itemID string) {
 	c.inventory[itemID] = true
 }
 
-// consumeLocked destroys the instance of itemID that c is carrying, freeing
-// the id so a later spawnLocked may hand out a fresh one — without this a
-// delivered item is gone for good and every later taker of the same quest is
-// stuck holding one it can never complete. h.mu must already be held.
+// consumeLocked destroys the instance of itemID c is carrying, freeing the
+// id so a later spawnLocked can hand out a fresh one. h.mu must already be
+// held.
 func (h *Hub) consumeLocked(c *Client, itemID string) {
 	delete(c.inventory, itemID)
 	delete(h.spawnedItems, itemID)
@@ -270,10 +260,9 @@ func (h *Hub) SendTo(name, line string) {
 	}
 }
 
-// CreateGroup makes c the sole member of a fresh group and returns its id.
-// The id is c's own name, disambiguated with a numeric suffix if a
-// still-populated group already claims it — possible if c left a group that
-// other members kept alive (GroupNotFound/D12 is the mirror case).
+// CreateGroup makes c the sole member of a fresh group and returns its id:
+// c's own name, numerically suffixed if a still-populated group claims it
+// already (D12).
 func (h *Hub) CreateGroup(c *Client) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -287,9 +276,9 @@ func (h *Hub) CreateGroup(c *Client) string {
 }
 
 // JoinGroup resolves arg as a group id, falling back to the current group of
-// the player named arg (D12/quirk #4: GROUP INVITE's event carries only the
-// inviter's name, so an invitee has no id to pass — this lets
-// "GROUP JOIN <inviter>" work anyway). ok is false if neither resolves.
+// the player named arg — GROUP INVITE's event only carries the inviter's
+// name (D12/quirk #4), so "GROUP JOIN <inviter>" needs this to work. ok is
+// false if neither resolves.
 func (h *Hub) JoinGroup(c *Client, arg string) (id string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -381,9 +370,8 @@ func findItem(items []string, arg string, w *world.World) int {
 }
 
 // TakeItem resolves arg against room's floor items (id or display name) and
-// moves it into c's inventory. The whole resolve-then-move happens under one
-// lock acquisition, so two players racing the same TAKE can never both
-// succeed — items are unique instances (RFC §8) by construction, not by luck.
+// moves it into c's inventory. Resolve-then-move happens under one lock, so
+// two players racing the same TAKE can never both succeed.
 func (h *Hub) TakeItem(c *Client, room, arg string) (id string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
