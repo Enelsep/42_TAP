@@ -62,13 +62,10 @@ func (s *Server) handleConn(conn net.Conn) {
 	go c.writeLoop()
 
 	defer func() {
-		// Closing conn is writeLoop's job (after it drains c.out) so a
-		// reply queued right before disconnect is never lost to a race.
+		// Closing conn is writeLoop's job, after it drains c.out.
 		if c.name != "" {
-			// Remove state, *then* tell the room (and group, if any), *then*
-			// the whole server — the order the subject requires for a clean
-			// disconnect. room and group must be read before Unregister,
-			// which clears the latter.
+			// Remove state, then tell the room/group, then the server —
+			// read room/group before Unregister, which clears the latter.
 			room, group := c.room, c.group
 			s.hub.Unregister(c)
 			s.hub.BroadcastRoom(room, protocol.FormatEvent(protocol.Event{
@@ -91,14 +88,10 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	c.send(protocol.Greeting + protocol.LineTerm)
 
-	// bufio.Scanner's default 64KB token buffer is well past MaxLineLen
-	// (1024, D5), but it's still finite: a line beyond it makes Scan return
-	// false with no way to tell that apart from a clean disconnect, so the
-	// oversized-line case (T4.1) got no reply at all instead of 400
-	// BAD_REQUEST. A buffer just past MaxLineLen fixes that — any line
-	// ParseCommand would reject as too long now fits and reaches it, so the
-	// scanner's own error path is reserved for lines the protocol was never
-	// going to accept regardless of length.
+	// Scanner's default 64KB buffer would swallow an oversized line as an
+	// unreadable Scan failure, indistinguishable from a clean disconnect
+	// (T4.1) — sized just past MaxLineLen (D5), any line ParseCommand
+	// would reject as too long still reaches it and gets a real 400.
 	scanner := bufio.NewScanner(conn)
 	scanBuf := make([]byte, 0, 2*protocol.MaxLineLen)
 	scanner.Buffer(scanBuf, 2*protocol.MaxLineLen)
@@ -186,14 +179,10 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 	}
 	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
-		// A line past the buffer above — reply once before the deferred
-		// cleanup closes the connection, so this is a rejection (§9.3), not
-		// an unexplained drop indistinguishable from the network dying.
-		// Every *other* Scan failure is an actual network error (a plain
-		// disconnect, or the abrupt RST T4.2 fires at a client mid-broadcast)
-		// — those get no reply, same as before this check existed, since
-		// there is nothing here to reject and the connection is already
-		// gone in every sense that matters.
+		// A line past the buffer above: reply before cleanup closes the
+		// connection, so it's a rejection (§9.3), not an unexplained drop.
+		// Every other Scan failure is a real network error — no reply,
+		// since the connection is already gone.
 		c.send(protocol.FormatErr(protocol.ErrBadRequest))
 	}
 }
@@ -227,9 +216,8 @@ func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 }
 
 // handleLook replies with the current room, who else is there, and what's
-// on the floor — the floor comes from the hub's dynamic state, which is what
-// TAKE/DROP actually mutate. The NPC list goes through RoomNPC rather than
-// the world's static Spawns, so a killed enemy stops showing up (D15).
+// on the floor. NPCs go through RoomNPC, not the static Spawns, so a killed
+// enemy stops showing up (D15).
 func (s *Server) handleLook(c *Client) {
 	loc := s.world.Locations[c.room]
 
@@ -469,9 +457,8 @@ func (s *Server) handleQuests(c *Client) {
 	c.send(protocol.FormatOK(string(data)))
 }
 
-// handleAttack resolves one ATTACK turn (D15): c's hit, then npc's counter if
-// it survives, both inside Hub.AttackNPC's single lock acquisition so two
-// players finishing the same NPC off can never both trigger its death.
+// handleAttack resolves one ATTACK turn (D15), c's hit then npc's counter,
+// inside AttackNPC's single lock so two players can't both trigger a kill.
 func (s *Server) handleAttack(c *Client, cmd protocol.Command) {
 	npc := s.hub.NPCIn(c.room, cmd.Arg)
 	if npc == nil {
@@ -535,9 +522,7 @@ func (s *Server) handleDefend(c *Client) {
 }
 
 // handleFlee forces a random valid move, taking one free counter-attack from
-// any live enemy in the room on the way out (D16). The reply carries that
-// hit's damage and c's resulting status alongside the room move, so it
-// isn't the one combat outcome the wire never reports.
+// any live enemy on the way out (D16); the reply carries that hit too.
 func (s *Server) handleFlee(c *Client) {
 	oldRoom := c.room
 	reply, respawned, ok := s.hub.Flee(c)

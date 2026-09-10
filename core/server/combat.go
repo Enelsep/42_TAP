@@ -73,16 +73,10 @@ func (h *Hub) respawnLocked(c *Client) {
 }
 
 // killNPCLocked marks npc dead for good, drops its items into room, and
-// completes the kill quest (if any) for every player currently holding it
-// active — kill credit is shared by everyone who has taken the contract,
-// not just whoever landed the blow (D15).
-//
-// The reward is not shared: it is a single item instance (RFC §8), so it
-// goes to killer alone, and only if killer had taken the contract. Handing
-// it to "every holder" through spawnLocked instead gave it to whichever
-// client the map yielded first — in practice the earliest to connect, so a
-// bystander standing in the start room reliably collected the pay.
-// h.mu must already be held.
+// completes the kill quest (if any) for every holder, not just the killer
+// (D15). The reward stays unshared — a single item instance (RFC §8) — so
+// only killer gets it, and only if killer held the contract. h.mu must
+// already be held.
 func (h *Hub) killNPCLocked(killer *Client, room string, npc *world.NPC) {
 	h.npcHP[npc.ID] = 0
 	for _, drop := range npc.Drops {
@@ -105,12 +99,10 @@ func (h *Hub) killNPCLocked(killer *Client, room string, npc *world.NPC) {
 	}
 }
 
-// AttackNPC resolves one full ATTACK turn against npc: c's hit lands first,
-// and if npc survives it counters synchronously in the same call — the
-// whole of this server's "turn-based" combat, no scheduler involved (D15).
-// ok is false if npc had already died — to a counter-attacking pace, or to
-// another player — between resolution and this call; the caller should treat
-// that exactly like NPC_NOT_FOUND, since to c the effect is the same.
+// AttackNPC resolves one ATTACK turn: c's hit lands first, npc counters
+// synchronously if it survives — this server's whole "turn-based" combat,
+// no scheduler (D15). ok is false if npc already died before this call; the
+// caller should treat that exactly like NPC_NOT_FOUND.
 func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, npcDied, respawned, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -161,35 +153,27 @@ func statusFor(hp int) string {
 	}
 }
 
-// StatusOf reports c's current HP and derived status (D15): "healthy" at max
-// HP, "dead" only ever observed inline in the AttackReply that caused it
-// (respawn is synchronous), "combat" otherwise — there is no in-between
-// "currently fighting" state to track, since a turn never outlives one
-// ATTACK/FLEE call.
+// StatusOf reports c's current HP and derived status (D15). No "currently
+// fighting" state exists to track — a turn never outlives one ATTACK/FLEE.
 func (h *Hub) StatusOf(c *Client) protocol.StatusReply {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return protocol.StatusReply{HP: c.hp, MaxHP: PlayerMaxHP, Status: statusFor(c.hp)}
 }
 
-// Defend arms a one-shot flag that halves the damage of c's next
-// counter-attack, from ATTACK or FLEE, whichever comes first — DEFEND has no
-// notion of "which fight" it belongs to, since none of our combat state
-// outlives a single call (D15/D16).
+// Defend arms a one-shot flag halving c's next counter-attack, from ATTACK
+// or FLEE, whichever comes first (D15/D16).
 func (h *Hub) Defend(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	c.defending = true
 }
 
-// Flee moves c through a random usable exit (never a gated one c can't open,
-// same rule MOVE follows), taking one free hit from any live enemy in the
-// room on the way out — the roadmap's "forced MOVE with one free
-// counterattack". The reply's Damage/Status reflect that hit: Damage is 0
-// and Status carries c's already-current status when no enemy shared the
-// room to land one. respawned reports whether the hit was fatal, in which
-// case c ends up at the world's start room rather than the fled-to one. ok
-// is false only if the room has no usable exit to flee through.
+// Flee moves c through a random usable exit (never a gated one), taking one
+// free hit from any live enemy in the room on the way out. respawned
+// reports whether that hit was fatal, in which case c ends up at the
+// world's start room instead of the fled-to one. ok is false only if the
+// room has no usable exit.
 func (h *Hub) Flee(c *Client) (reply protocol.FleeReply, respawned, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

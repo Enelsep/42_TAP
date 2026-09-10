@@ -10,11 +10,8 @@ import (
 )
 
 // hasControlChar reports whether s contains a control character — most
-// importantly \n or \r. TALK and quest-completion replies send NPC/quest
-// dialogue as raw text, not JSON (json.Marshal already escapes these for
-// every other field), so an embedded newline in world data would let it
-// forge extra protocol lines on the wire — the RFC §9.2 handling issue
-// reachable only through this one path.
+// importantly \n, which TALK/quest dialogue send as raw text (not JSON),
+// so an embedded newline in world data could forge an extra wire line.
 func hasControlChar(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
