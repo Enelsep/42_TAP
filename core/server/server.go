@@ -88,10 +88,6 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	c.send(protocol.Greeting + protocol.LineTerm)
 
-	// Scanner's default 64KB buffer would swallow an oversized line as an
-	// unreadable Scan failure, indistinguishable from a clean disconnect
-	// (T4.1) — sized just past MaxLineLen (D5), any line ParseCommand
-	// would reject as too long still reaches it and gets a real 400.
 	scanner := bufio.NewScanner(conn)
 	scanBuf := make([]byte, 0, 2*protocol.MaxLineLen)
 	scanner.Buffer(scanBuf, 2*protocol.MaxLineLen)
@@ -171,31 +167,20 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.handleFlee(c)
 
 		default:
-			// Unreachable in theory — ParseCommand only ever returns a Verb
-			// with a case above — but a WARN here means a future Verb added
-			// to protocol.go without a matching case fails loud, not silent.
 			slog.Warn("unhandled verb", "remote", remoteStr, "player", c.name, "verb", cmd.Verb)
 			c.send(protocol.FormatOK(""))
 		}
 	}
 	if errors.Is(scanner.Err(), bufio.ErrTooLong) {
-		// A line past the buffer above: reply before cleanup closes the
-		// connection, so it's a rejection (§9.3), not an unexplained drop.
-		// Every other Scan failure is a real network error — no reply,
-		// since the connection is already gone.
 		c.send(protocol.FormatErr(protocol.ErrBadRequest))
 	}
 }
 
-// handleConnect claims a name in the hub or replies 201 NAME_IN_USE, then
-// places the new player in the world's start room.
 func (s *Server) handleConnect(c *Client, cmd protocol.Command) {
 	if c.name != "" {
 		c.send(protocol.FormatErr(protocol.ErrNameInUse))
 		return
 	}
-	// Set both fields *before* Register publishes c into the hub map, so no
-	// other goroutine can ever observe c with a name but no room yet.
 	c.name = cmd.Arg
 	c.room = s.world.Start
 	if !s.hub.Register(c) {

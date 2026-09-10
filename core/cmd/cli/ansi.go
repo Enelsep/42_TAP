@@ -1,8 +1,5 @@
 package main
 
-// Minimal ANSI SGR codes — no external dependency (T5.2's "ANSI colors, no
-// lib"). colorize wraps s in code and an unconditional reset, so nested
-// colorize calls can never leak one color into the next.
 const (
 	ansiReset   = "\x1b[0m"
 	ansiBold    = "\x1b[1m"

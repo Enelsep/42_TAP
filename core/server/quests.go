@@ -8,10 +8,6 @@ import (
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
-// npcAt returns the NPC spawned in room, or nil if there is none — the raw
-// world-data lookup, with no notion of whether an enemy has since been
-// killed. RoomNPC (combat.go) layers that liveness check on top; TALK/QUEST
-// resolve NPCs through Hub.NPCIn, never through this function directly.
 func npcAt(w *world.World, room string) *world.NPC {
 	loc := w.Locations[room]
 	if loc == nil || loc.Spawns == nil {
@@ -20,9 +16,6 @@ func npcAt(w *world.World, room string) *world.NPC {
 	return w.NPCs[loc.Spawns.NPCType]
 }
 
-// TalkLine returns npc's next dialogue line, cycling through world.NPC.Dialogue
-// and wrapping around. The cursor is per-NPC and shared by every player who
-// talks to it (D14) — flavor text, not player state, so one cursor is enough.
 func (h *Hub) TalkLine(npc *world.NPC) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -31,10 +24,6 @@ func (h *Hub) TalkLine(npc *world.NPC) string {
 	return npc.Dialogue[i]
 }
 
-// CompleteDelivery checks whether npc is the target of a deliver quest c is
-// carrying the item for, and if so closes it: item consumed, reward
-// granted, state completed (D10). line is the quest's Complete dialogue,
-// meant to replace npc's own TalkLine, not combine with it.
 func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line, quest string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -53,10 +42,6 @@ func (h *Hub) CompleteDelivery(c *Client, npc *world.NPC) (line, quest string, o
 	return "", "", false
 }
 
-// QuestInfo resolves QUEST <npc>. The first call accepts the quest on the
-// spot — D10 has no separate accept step — and grants q.Grants straight
-// into the inventory. ok is false if npc offers no quest, or it's already
-// completed (406, D10).
 func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description, status string, justAccepted, ok bool) {
 	if npc.Quest == "" {
 		return nil, "", "", false, false
@@ -69,8 +54,6 @@ func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description,
 	case protocol.QuestCompleted:
 		return nil, "", "", false, false
 	case protocol.QuestActive:
-		// Re-hands the grant if the instance is gone and c isn't holding it;
-		// spawnLocked no-ops otherwise, so this can't mint a second one.
 		h.spawnLocked(c, q.Grants)
 		return q, q.Dialogue.Active, protocol.QuestActive, false, true
 	default:
@@ -80,9 +63,6 @@ func (h *Hub) QuestInfo(c *Client, npc *world.NPC) (q *world.Quest, description,
 	}
 }
 
-// QuestsFor returns c's known quests — active or completed, sorted by id.
-// D10: progress is "0/1" while active and "1/1" once completed, since both
-// our quests have a single objective.
 func (h *Hub) QuestsFor(c *Client) []protocol.QuestEntry {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -9,16 +9,10 @@ import (
 	"unicode"
 )
 
-// hasControlChar reports whether s contains a control character — most
-// importantly \n, which TALK/quest dialogue send as raw text (not JSON),
-// so an embedded newline in world data could forge an extra wire line.
 func hasControlChar(s string) bool {
 	return strings.ContainsFunc(s, unicode.IsControl)
 }
 
-// Validate reports every structural problem in a loaded world at once, so a
-// broken world file is fixed in one pass rather than one server start per typo.
-// Ids in the messages are canonical, matching what Load produced.
 func (w *World) Validate() error {
 	var problems []error
 	bad := func(format string, args ...any) {
@@ -266,10 +260,6 @@ func missing(w *World, adj map[string][]string) []string {
 	return unseen
 }
 
-// hasCircuit reports whether the exit graph holds a directed cycle of at least
-// three rooms — a loop the player can walk, as opposed to a corridor walked
-// back and forth. Depth-first with the current path marked; worlds are small
-// enough that the unbounded search never matters.
 func (w *World) hasCircuit() bool {
 	const minRooms = 3
 	depth := make(map[string]int, len(w.Locations)) // 0 means "not on the current path"

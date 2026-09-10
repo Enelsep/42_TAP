@@ -39,9 +39,9 @@ type Location struct {
 	ID          string            `json:"-"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	Exits       map[string]string `json:"exits"`              // direction → location id
-	Requires    map[string]string `json:"requires,omitempty"` // direction → item id the player must carry
-	Items       []string          `json:"items,omitempty"`    // initial placement only
+	Exits       map[string]string `json:"exits"`
+	Requires    map[string]string `json:"requires,omitempty"`
+	Items       []string          `json:"items,omitempty"`
 	Spawns      *Spawn            `json:"spawns,omitempty"`
 }
 
@@ -54,7 +54,7 @@ type Item struct {
 	ID          string `json:"-"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Obtainable  bool   `json:"obtainable"` // false = must not appear in a location's static items list (Validate); not enforced at TAKE
+	Obtainable  bool   `json:"obtainable"`
 }
 
 type NPC struct {
@@ -62,11 +62,11 @@ type NPC struct {
 	Name        string   `json:"name"`
 	Role        string   `json:"role"`
 	Description string   `json:"description"`
-	Dialogue    []string `json:"dialogue"` // TALK lines, independent of quest state
+	Dialogue    []string `json:"dialogue"`
 	Stats       *Stats   `json:"stats,omitempty"`
-	Drops       []string `json:"drops,omitempty"`    // released into the room on death
-	Quest       string   `json:"quest,omitempty"`    // quest id this NPC offers
-	Requires    string   `json:"requires,omitempty"` // item id without which attacks barely scratch it
+	Drops       []string `json:"drops,omitempty"`
+	Quest       string   `json:"quest,omitempty"`
+	Requires    string   `json:"requires,omitempty"`
 }
 
 type Stats struct {
@@ -79,14 +79,12 @@ type Quest struct {
 	Name     string        `json:"name"`
 	Type     string        `json:"type"`
 	Giver    string        `json:"giver"`
-	Target   string        `json:"target"`           // NPC to deliver to, or to kill
-	Grants   string        `json:"grants,omitempty"` // item handed over on accept
+	Target   string        `json:"target"`
+	Grants   string        `json:"grants,omitempty"`
 	Reward   string        `json:"reward"`
 	Dialogue QuestDialogue `json:"dialogue"`
 }
 
-// QuestDialogue is keyed by quest state. Complete is spoken by the target for a
-// deliver quest and by the giver for a kill quest.
 type QuestDialogue struct {
 	Offer    string `json:"offer"`
 	Active   string `json:"active"`

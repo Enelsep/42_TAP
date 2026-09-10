@@ -11,26 +11,19 @@ import (
 	"github.com/Enelsep/42_TAP/core/world"
 )
 
-// Client is one connected player: the socket, and a buffered outbound queue
-// drained by its own writer goroutine, so a slow or dead client can never
-// block a broadcast to everyone else.
 type Client struct {
 	conn      net.Conn
 	out       chan string
-	name      string          // empty until CONNECT succeeds
-	room      string          // canonical room id; only meaningful once name != ""
-	group     string          // group id; empty means "not in a group"
-	inventory map[string]bool // canonical item ids currently held
+	name      string
+	room      string
+	group     string
+	inventory map[string]bool
+	quests    map[string]string
 
-	// quests holds only "active" and "completed" entries (protocol.QuestActive
-	// / protocol.QuestCompleted): a quest a player has never accepted is simply
-	// absent, which is what D10 calls the implicit "available" state.
-	quests map[string]string
+	hp        int
+	defending bool
 
-	hp        int  // current HP; see PlayerMaxHP/RespawnHP in combat.go (D15)
-	defending bool // DEFEND armed: halves the damage of the next hit taken
-
-	rate commandRate // flood tracking (D17); touched only by this client's reader goroutine
+	rate commandRate
 }
 
 func newClient(conn net.Conn) *Client {
@@ -53,16 +46,8 @@ func (c *Client) send(line string) {
 	}
 }
 
-// maxLoggedReplyData caps how much of an OK reply's data logReply embeds
-// verbatim. LOOK's room JSON alone can run past this on a room with a full
-// item/NPC list, and logging it whole on every LOOK drowns a log tail in
-// room dumps instead of the player actions D17 actually wants visible.
 const maxLoggedReplyData = 200
 
-// logReply logs the OK/ERR outcome of one reply, the moment it's handed to
-// send — every handler's outcome ends up here without threading a logger
-// through all of them (D17). EVT lines match neither prefix and are
-// skipped: they're a notification about someone else's action, not a reply.
 func logReply(player, line string) {
 	head, rest, _ := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
 	switch head {
@@ -79,10 +64,6 @@ func logReply(player, line string) {
 	}
 }
 
-// writeLoop drains c.out to the socket until the channel is closed by the
-// hub (on Unregister) or by handleConn (if CONNECT never succeeded), then
-// closes the connection itself — always after its last Write, never racing
-// against one.
 func (c *Client) writeLoop() {
 	defer c.conn.Close()
 	for line := range c.out {
@@ -90,17 +71,15 @@ func (c *Client) writeLoop() {
 	}
 }
 
-// Hub is the mutex-guarded registry of connected clients, groups, and
-// dynamic item placement — all mutable game state behind one lock.
 type Hub struct {
 	mu           sync.Mutex
 	clients      map[string]*Client
-	groups       map[string]map[string]*Client // group id -> members, by name
-	roomItems    map[string][]string           // room id -> item ids on the floor
-	npcTalk      map[string]int                // npc id -> next dialogue index (D14: one shared cursor)
-	spawnedItems map[string]bool               // item ids that currently exist anywhere, see spawnLocked
-	npcHP        map[string]int                // npc id -> current hp, enemies only (D15); 0 = dead, gone for good
-	world        *world.World                  // read-only: item names for display-name resolution
+	groups       map[string]map[string]*Client
+	roomItems    map[string][]string
+	npcTalk      map[string]int
+	spawnedItems map[string]bool
+	npcHP        map[string]int
+	world        *world.World
 }
 
 // NewHub seeds the dynamic floor-item state from w's static placement.
@@ -142,14 +121,6 @@ func (h *Hub) Register(c *Client) bool {
 	return true
 }
 
-// Unregister removes c from every index that can reach it — client registry
-// and group, if any — then closes its outbound channel, stopping writeLoop.
-// A client left in any index is a ghost: the next broadcast to it sends on
-// a closed channel and panics the process.
-//
-// c's inventory drops onto its room's floor first — otherwise a disconnect
-// destroyed whatever c was carrying, which for a one-of-a-kind key could
-// lock a gated room for good.
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -171,10 +142,6 @@ func (h *Hub) Unregister(c *Client) {
 	close(c.out)
 }
 
-// spawnLocked creates itemID into c's inventory, unless an instance already
-// exists somewhere in the world. Items are single instances (RFC §8); quest
-// grants/rewards are the one path that conjures one from nothing, so it's
-// the one path that has to check. h.mu must already be held.
 func (h *Hub) spawnLocked(c *Client, itemID string) {
 	if itemID == "" || h.spawnedItems[itemID] {
 		return
@@ -183,9 +150,6 @@ func (h *Hub) spawnLocked(c *Client, itemID string) {
 	c.inventory[itemID] = true
 }
 
-// consumeLocked destroys the instance of itemID c is carrying, freeing the
-// id so a later spawnLocked can hand out a fresh one. h.mu must already be
-// held.
 func (h *Hub) consumeLocked(c *Client, itemID string) {
 	delete(c.inventory, itemID)
 	delete(h.spawnedItems, itemID)
@@ -200,9 +164,6 @@ func (h *Hub) Broadcast(line string) {
 	}
 }
 
-// BroadcastRoom enqueues line to every registered client currently in room,
-// skipping except when it is non-nil (typically the client who caused the
-// event, who already got a direct reply).
 func (h *Hub) BroadcastRoom(room, line string, except *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -234,9 +195,6 @@ func (h *Hub) PlayersIn(room string) []string {
 	return players
 }
 
-// SetRoom moves c to room. Every write to c.room must go through setRoomLocked
-// (never c.room = ... directly) once c is registered, so a concurrent
-// BroadcastRoom or PlayersIn reading c.room under h.mu never races the write.
 func (h *Hub) SetRoom(c *Client, room string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -260,9 +218,6 @@ func (h *Hub) SendTo(name, line string) {
 	}
 }
 
-// CreateGroup makes c the sole member of a fresh group and returns its id:
-// c's own name, numerically suffixed if a still-populated group claims it
-// already (D12).
 func (h *Hub) CreateGroup(c *Client) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -275,10 +230,6 @@ func (h *Hub) CreateGroup(c *Client) string {
 	return id
 }
 
-// JoinGroup resolves arg as a group id, falling back to the current group of
-// the player named arg — GROUP INVITE's event only carries the inviter's
-// name (D12/quirk #4), so "GROUP JOIN <inviter>" needs this to work. ok is
-// false if neither resolves.
 func (h *Hub) JoinGroup(c *Client, arg string) (id string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
