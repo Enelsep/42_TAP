@@ -64,8 +64,9 @@ type NPC struct {
 	Description string   `json:"description"`
 	Dialogue    []string `json:"dialogue"` // TALK lines, independent of quest state
 	Stats       *Stats   `json:"stats,omitempty"`
-	Drops       []string `json:"drops,omitempty"` // released into the room on death
-	Quest       string   `json:"quest,omitempty"` // quest id this NPC offers
+	Drops       []string `json:"drops,omitempty"`    // released into the room on death
+	Quest       string   `json:"quest,omitempty"`    // quest id this NPC offers
+	Requires    string   `json:"requires,omitempty"` // item id without which attacks barely scratch it
 }
 
 type Stats struct {
@@ -150,6 +151,9 @@ func (w *World) canonicalize() {
 		npc.ID = PrefixNPC + key
 		for i, drop := range npc.Drops {
 			npc.Drops[i] = PrefixItem + drop
+		}
+		if npc.Requires != "" {
+			npc.Requires = PrefixItem + npc.Requires
 		}
 		npcs[npc.ID] = npc // npc.Quest already holds a bare quest id
 	}

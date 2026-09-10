@@ -15,6 +15,11 @@ const (
 	PlayerMaxHP      = 100
 	RespawnHP        = 50 // roadmap T3.7: 0 HP respawns at the start room, at half health
 	PlayerBaseDamage = 15
+
+	// UnarmedDamage is what a hit lands for against an enemy whose world
+	// data names an item the attacker isn't carrying (D21) — a scratch, not
+	// a refusal, so the fight still plays out as a fight.
+	UnarmedDamage = 1
 )
 
 // rollDamage jitters base by roughly ±20% (at least ±1) and never returns
@@ -115,6 +120,9 @@ func (h *Hub) AttackNPC(c *Client, npc *world.NPC) (reply protocol.AttackReply, 
 	}
 
 	dmg := rollDamage(PlayerBaseDamage)
+	if npc.Requires != "" && !c.inventory[npc.Requires] {
+		dmg = UnarmedDamage // no jitter: the point is that it is derisory, every time
+	}
 	hp := max(0, h.npcHP[npc.ID]-dmg)
 	h.npcHP[npc.ID] = hp
 

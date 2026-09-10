@@ -114,6 +114,13 @@ func (w *World) Validate() error {
 			}
 		}
 		switch {
+		case npc.Requires == "":
+		case w.Items[npc.Requires] == nil:
+			bad("%s: requires unknown item %s", id, npc.Requires)
+		case npc.Role != RoleEnemy:
+			bad("%s: requires %s but its role is %q, so it is never attacked", id, npc.Requires, npc.Role)
+		}
+		switch {
 		case npc.Quest == "" && npc.Role == RoleQuestGiver:
 			bad("%s: role is %q but it offers no quest", id, RoleQuestGiver)
 		case npc.Quest != "" && npc.Role != RoleQuestGiver:

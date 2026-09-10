@@ -259,6 +259,72 @@ input:focus {
     min-height: 0;
 }
 
+/* --- dialogue box: the empty centre cell, over the room art --- */
+
+#dialogue {
+    grid-area: 2 / 2 / 3 / 3;
+    align-self: center;
+    justify-self: center;
+    width: min(560px, 100%);
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px 18px;
+    overflow: hidden;
+}
+
+/* .panel sets no display of its own, so [hidden] needs saying here. */
+#dialogue[hidden] {
+    display: none;
+}
+
+.dialogue-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.dialogue-head h2 {
+    margin: 0;
+}
+
+#dialogue-close {
+    flex: none;
+    padding: 3px 9px;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.dialogue-text {
+    margin: 0;
+    min-height: 1.7em;
+    overflow-y: auto;
+    font-size: 15px;
+    line-height: 1.7;
+}
+
+/* The caret exists only while characters are still arriving, and rides along
+   after the last one because it is the text node's own ::after. */
+/* Only clickable while there is a crawl left to skip. */
+#dialogue.typing .dialogue-text {
+    cursor: pointer;
+}
+
+#dialogue.typing .dialogue-text::after {
+    content: '\25AE';
+    margin-left: 3px;
+    color: var(--amber);
+    animation: caret 1.05s steps(1) infinite;
+}
+
+@keyframes caret {
+    50% {
+        opacity: 0;
+    }
+}
+
 #controls {
     grid-area: 3 / 1 / 4 / -1;
     display: flex;

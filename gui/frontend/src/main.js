@@ -8,10 +8,12 @@ import { EventsOn } from '../wailsjs/runtime/runtime';
 
 import bar from './assets/images/bar.png';
 import boss from './assets/images/boss.png';
+import bossClear from './assets/images/boss_2.png';
 import camp from './assets/images/camp.png';
 import city from './assets/images/city.png';
 import door from './assets/images/door.png';
 import nest from './assets/images/nest.png';
+import nestClear from './assets/images/nest_2.png';
 import shop from './assets/images/shop.png';
 import square from './assets/images/square.png';
 import start from './assets/images/start.png';
@@ -36,6 +38,16 @@ const BACKDROPS = {
     'loc.bar': bar, 'loc.bossroom': boss, 'loc.camp': camp, 'loc.city': city,
     'loc.door': door, 'loc.nest': nest, 'loc.shop': shop, 'loc.square': square,
     'loc.start': start, 'loc.suburbs': suburbs,
+};
+
+// Same rooms, painted without their enemy. Used once that enemy is dead —
+// which the client reads off LOOK, since the server drops a killed enemy from
+// the room's npcs (D15). Only the two enemy rooms have a variant, and each
+// holds exactly one NPC, so "no npcs here" is the same statement as "the
+// enemy is dead"; a room with an enemy *and* a merchant would need the
+// enemy's id checked by name instead.
+const BACKDROPS_CLEARED = {
+    'loc.bossroom': bossClear, 'loc.nest': nestClear,
 };
 
 
@@ -97,6 +109,71 @@ function toast(text, isError = false) {
     el.textContent = text;
     $('toasts').append(el);
     setTimeout(() => el.remove(), 4000);
+}
+
+// --- dialogue box ---------------------------------------------------------
+
+const TYPE_MS = 24; // per character
+// A beat on punctuation is most of what makes the crawl read as speech
+// rather than as a progress bar.
+const TYPE_PAUSE = { ',': 130, ';': 130, ':': 130, '.': 210, '!': 210, '?': 210, '\u2014': 170 };
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+let typeTimer = null;
+let typeFull = '';
+
+function stopTyping() {
+    clearTimeout(typeTimer);
+    typeTimer = null;
+    $('dialogue').classList.remove('typing');
+}
+
+// Drops the rest of the line in at once — the classic "click to skip".
+function finishTyping() {
+    if (!typeTimer) return;
+    $('dialogue-text').textContent = typeFull;
+    stopTyping();
+}
+
+// Streams text one code point at a time. Array.from is what keeps a
+// multi-unit character whole: the being beyond the veil speaks in symbols,
+// and indexing a JS string would tear a surrogate pair in half.
+function typeInto(text) {
+    stopTyping();
+    const node = $('dialogue-text');
+    const chars = Array.from(text);
+    typeFull = text;
+    node.textContent = '';
+
+    if (!chars.length || REDUCED_MOTION.matches) {
+        node.textContent = text;
+        return;
+    }
+
+    $('dialogue').classList.add('typing');
+    let i = 0;
+    const step = () => {
+        node.textContent += chars[i];
+        const pause = TYPE_PAUSE[chars[i]] ?? 0;
+        if (++i >= chars.length) {
+            stopTyping();
+            return;
+        }
+        typeTimer = setTimeout(step, TYPE_MS + pause);
+    };
+    step();
+}
+
+function showDialogue(speaker, text) {
+    $('dialogue-speaker').textContent = speaker;
+    $('dialogue').hidden = false;
+    typeInto(text);
+}
+
+function closeDialogue() {
+    stopTyping();
+    $('dialogue').hidden = true;
 }
 
 async function guard(fn) {
@@ -195,11 +272,10 @@ function setMuted(next) {
 
 let showingA = false;
 
-function setBackdrop(roomID) {
-    if (state.backdrop === roomID) return;
-    const url = BACKDROPS[roomID];
-    if (!url) return;
-    state.backdrop = roomID;
+function setBackdrop(roomID, cleared) {
+    const url = (cleared && BACKDROPS_CLEARED[roomID]) || BACKDROPS[roomID];
+    if (!url || state.backdrop === url) return;
+    state.backdrop = url;
 
     const next = showingA ? $('bg-b') : $('bg-a');
     const current = showingA ? $('bg-a') : $('bg-b');
@@ -248,7 +324,7 @@ function renderRoom() {
     $('hud-room').textContent = room.name || '';
     $('room-desc').textContent = room.description || '';
     $('count-room').textContent = state.players.length;
-    setBackdrop(room.id);
+    setBackdrop(room.id, state.npcs.length === 0);
     playRoomMusic(room.id);
 
     listInto($('room-npcs'), state.npcs.map((id) => ({
@@ -352,6 +428,8 @@ function renderHealth({ hp, max_hp }) {
 async function refreshRoom() {
     const look = await guard(Look);
     if (!look.ok) return;
+    const previous = state.room?.id;
+    if (previous && previous !== look.value.room.id) closeDialogue();
     state.room = look.value.room;
     state.roomNames[look.value.room.id] = look.value.room.name;
     state.players = look.value.players || [];
@@ -444,6 +522,7 @@ async function talkTo(id) {
     const said = await guard(() => Talk(id));
     if (!said.ok) return;
     logLine(`${pretty(id)}: ${said.value}`);
+    showDialogue(pretty(id), said.value);
     // Talking to a delivery target completes the quest server-side: the
     // carried item is consumed and the reward granted, and neither shows up
     // until we ask again.
@@ -510,6 +589,7 @@ async function askQuest(id) {
     const q = quest.value;
     state.questGivers[q.quest_id] = pretty(id); // the only place the giver is known
     logLine(`${pretty(id)}: ${q.description}`);
+    showDialogue(pretty(id), q.description);
     logLine(`quest ${pretty(q.quest_id)} — ${QUEST_LABELS[q.status] || q.status}, reward ${pretty(q.reward)}`);
     await refreshInventory(); // accepting can grant the quest item on the spot
 }
@@ -748,6 +828,9 @@ $('btn-flee').onclick = flee;
 $('combat-close').onclick = closeCombat;
 $('quests-close').onclick = () => { $('quests').hidden = true; };
 
+$('dialogue-close').onclick = closeDialogue;
+$('dialogue-text').onclick = finishTyping;
+
 $('chat-input').addEventListener('focus', () => $('chat').classList.remove('collapsed'));
 $('chat-input').addEventListener('blur', () => $('chat').classList.add('collapsed'));
 
@@ -762,12 +845,16 @@ $('chat-form').onsubmit = async (e) => {
 // Keep the compass usable from the keyboard, except while typing.
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || $('hud').hidden) return;
+    if (e.key === 'Escape' && !$('dialogue').hidden) {
+        if (typeTimer) finishTyping(); else closeDialogue();
+        return;
+    }
     const dir = { ArrowUp: 'north', ArrowDown: 'south', ArrowLeft: 'west', ArrowRight: 'east' }[e.key];
     if (dir && state.room?.exits?.[dir]) move(dir);
 });
 
 // Decode every backdrop up front so a move never flashes an empty frame.
-for (const url of Object.values(BACKDROPS)) {
+for (const url of [...Object.values(BACKDROPS), ...Object.values(BACKDROPS_CLEARED)]) {
     new Image().src = url;
 }
 

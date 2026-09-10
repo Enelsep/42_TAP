@@ -782,15 +782,50 @@ don't exist already answered `404`/`404 GROUP_NOT_FOUND` correctly (D12).
 
 ---
 
+## D21 — An enemy can name an item that its attacker needs
+
+The boss is meant to be the crysknife's reason to exist: the bone quest pays
+in a blade, and the blade is what makes the last fight winnable. Encoding
+that as "`ATTACK npc.boss` is refused without `item.crysknife`" would have
+been a lie about the world — the boss is standing right there — so the rule
+is expressed as damage instead.
+
+**The rule.** An NPC may carry `"requires": "<item>"` in `data/world.json`.
+A player attacking it without that item in inventory deals `UnarmedDamage`
+(1) instead of a `rollDamage(PlayerBaseDamage)` roll, flat and unjittered —
+the point is that the number is derisory every single time, which reads as
+"your blows barely scratch it" rather than as bad luck. Everything else about
+the exchange is unchanged: the enemy counters at full strength, DEFEND and
+FLEE work, death and respawn work. Carrying the item restores ordinary
+combat, and dropping it takes it away again — the check is on the inventory
+at the moment of the blow, not on a flag set when the fight began.
+
+**Why in the world file rather than in `combat.go`.** Hardcoding
+`npc.boss`/`item.crysknife` in the server would put content in code, which
+D11's canonical-id convention and `Validate`'s reference checking exist to
+prevent. As data it costs one field, and `Validate` earns its keep: it
+refuses a world naming an item that does not exist, and refuses to hang the
+rule on a non-enemy, which could never be attacked and so would silently do
+nothing. It also reuses the vocabulary gated exits already use
+(`Location.Requires`), for the same idea — this needs that item.
+
+**Known: 1 damage is not the same as unbeatable.** Enemy HP never
+regenerates (D15) and death costs only a walk back from the start room with
+your inventory intact, so a determined player can grind the boss down
+bare-handed. Measured, not guessed: 60 hits across 10 deaths. Closing that
+would mean either 0 damage — which turns the fight back into a refusal, the
+thing this design avoids — or healing an enemy once no one is fighting it,
+which is a new mechanic and a larger decision than this one.
+
+**Where.** `NPC.Requires` in `core/world/world.go` (canonicalised at load
+like every other reference); its checks in `core/world/validate.go`;
+`UnarmedDamage` and the `AttackNPC` branch in `core/server/combat.go`;
+`core/server/boss_test.go`.
+
+---
+
 ## Still open
 
-- **The `boss` NPC is defined but never placed.** `data/world.json` gives it a
-  name, dialogue and stats, but `bossroom` carries no `spawns` entry pointing
-  at it, so nothing is actually there to ATTACK yet (confirmed live while
-  testing D15/D16: the door opens with the key exactly as designed, the room
-  is just empty). `bossroom`'s own name and description are placeholders too.
-  It is the only room the key unlocks, so it is what the hunter contract
-  ultimately pays for.
 - **Control characters in messages** (§9.2: "reject or safely handle") — decide
   during T4.1's malformed-input gauntlet.
 - **CLI interface** — subject offers "raw RFC syntax" vs "translating layer";
