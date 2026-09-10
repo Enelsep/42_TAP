@@ -29,6 +29,9 @@ cli:    build ; ./bin/cli    -addr localhost:4241
 gui:
 	cd gui && wails dev
 
+gui-multi:
+	cd gui && wails dev -devserver localhost:34116
+
 gui-build:
 	cd gui && wails build
 

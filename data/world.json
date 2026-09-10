@@ -209,7 +209,8 @@
                 "stats": {
                     "hp": 60,
                     "damage": 10
-                }
+                },
+                "requires": "crysknife"
             }
         },
         "quests": {
